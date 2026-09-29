@@ -1,0 +1,37 @@
+--- a/ui/gtk.c
++++ b/ui/gtk.c
+@@ -823,10 +823,7 @@
+         return;
+     }
+ 
+-    if (vc->s->full_screen) {
+-        vc->gfx.scale_x = (double)ww / fbw;
+-        vc->gfx.scale_y = (double)wh / fbh;
+-    } else if (vc->s->free_scale) {
++    if (vc->s->full_screen || vc->s->free_scale) {
+         double sx, sy;
+ 
+         sx = (double)ww / fbw;
+@@ -2793,6 +2790,22 @@
+     }
+ 
+     vc = gd_vc_find_current(s);
++    /* Start a portrait console inside the desktop work area, including
++     * room for the window decorations. Subsequent resizes scale to fit. */
++    if (vc && vc->type == GD_VC_GFX && vc->gfx.ds && s->free_scale) {
++        GdkMonitor *monitor = gdk_display_get_monitor_at_window(
++            window_display, gtk_widget_get_window(s->window));
++        GdkRectangle work;
++        int width = surface_width(vc->gfx.ds);
++        int height = surface_height(vc->gfx.ds);
++        double fit;
++
++        gdk_monitor_get_workarea(monitor, &work);
++        fit = MIN(1.0, MIN((double)MAX(180, work.width - 80) / width,
++                          (double)MAX(240, work.height - 112) / height));
++        gtk_window_resize(GTK_WINDOW(s->window), MAX(1, (int)(width * fit)),
++                          MAX(1, (int)(height * fit)));
++    }
+     gtk_widget_set_sensitive(s->view_menu, vc != NULL);
+ #ifdef CONFIG_VTE
+     gtk_widget_set_sensitive(s->copy_item,

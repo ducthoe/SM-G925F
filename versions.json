@@ -1,0 +1,66 @@
+{
+  "downloads": {
+    "qemu": {
+      "file": "qemu-11.1.1.tar.xz",
+      "url": "https://download.qemu.org/qemu-11.1.1.tar.xz",
+      "sha256": "079ffbff8a7111bbc89022107cbabf3bbfd614d5fc9d7cc675991196aca12482"
+    },
+    "gcc": {
+      "file": "aarch64-gcc-4.9.tar.gz",
+      "url": "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/android-5.1.1_r1.tar.gz",
+      "sha256": "b2a9e0da8e0da4c8556785fd5cdb017db16d216055d1273885f9e2fd1975aed8"
+    },
+    "ndk": {
+      "file": "android-ndk-r25c-linux.zip",
+      "url": "https://dl.google.com/android/repository/android-ndk-r25c-linux.zip",
+      "sha256": "769ee342ea75f80619d985c2da990c48b3d8eaf45f48783a2d48870d04b46108"
+    },
+    "host_gl": {
+      "file": "tools_r24.4.1-linux.zip",
+      "url": "https://dl.google.com/android/repository/tools_r24.4.1-linux.zip",
+      "sha256": "68d670bcd6b01a357104576541a534aa6d946afa2b5fd01ef80bca94b6f27b8c"
+    },
+    "guest_gl": {
+      "file": "armeabi-v7a-21_r04.zip",
+      "url": "https://dl.google.com/android/repository/sys-img/android/armeabi-v7a-21_r04.zip",
+      "sha256": "4f20bb4abff1fcda7fdde510993d2004b0ca330ae6e7a798ffecc3fbf6d48520"
+    },
+    "busybox": {
+      "file": "busybox-static_arm64.deb",
+      "url": "https://deb.debian.org/debian/pool/main/b/busybox/busybox-static_1.37.0-6+b9_arm64.deb",
+      "sha256": "c833be48abfa16bc19c4966ec93e289ff1ce5d2f1476cad3a57bd105378cd15c"
+    }
+  },
+  "supersu": {
+    "version": "2.49",
+    "source_path": "build_image/boot/ramdisk/sbin/su",
+    "sha256": {
+      "su": "12bf25f3f5f9c52d8dbccd8d1a5ac36895436c6d17e09839f338d601fb986d5f",
+      "supolicy": "72bde86544ff083313d5055891c528e79652f7685f8905c8f48604ba1d509055",
+      "libsupol.so": "096b265d7e14d06d84258ac3dd440ce67e9112707b080f83009f4a60257ab044",
+      "SuperSU.apk": "ad5626f3544e0730dfb229711d77e6cfb580f4ab008f9b2d0d65cb5f64298cd7"
+    }
+  },
+  "sources": {
+    "kernel": {
+      "url": "https://github.com/HRTKernel/Hacker_Kernel_SM-G92X_old.git",
+      "commit": "d26d416dc3e85a4e8617ea32c917256e73eb196d"
+    },
+    "goldfish": {
+      "url": "https://github.com/LineageOS/android_device_generic_goldfish.git",
+      "commit": "208361067bfcad5223a774f5251b459390a0af56"
+    },
+    "core": {
+      "url": "https://github.com/aosp-mirror/platform_system_core.git",
+      "commit": "eb255708970f4723afa45ebc842de25ac9488235"
+    },
+    "hardware": {
+      "url": "https://github.com/aosp-mirror/platform_hardware_libhardware.git",
+      "commit": "64a2b7534486c509d0e13b91b12d52b42166080e"
+    },
+    "gcc": {
+      "url": "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9",
+      "commit": "d4d54ede13f6f76c77137c35a87fa5f0436eded2"
+    }
+  }
+}

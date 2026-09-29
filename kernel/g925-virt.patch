@@ -1,0 +1,964 @@
+diff --git a/arch/arm64/Makefile b/arch/arm64/Makefile
+index 0e49f63a..61d19099 100644
+--- a/arch/arm64/Makefile
++++ b/arch/arm64/Makefile
+@@ -42,7 +42,7 @@ CHECKFLAGS	+= -D__aarch64__
+ 
+ # exynos
+ machine-$(CONFIG_ARCH_EXYNOS)		+= exynos
+-plat-y		+= samsung
++plat-$(CONFIG_ARCH_EXYNOS)		+= samsung
+ ifneq ($(machine-y),)
+ MACHINE  := arch/arm64/mach-$(word 1,$(machine-y))/
+ else
+@@ -56,7 +56,11 @@ KBUILD_CPPFLAGS += $(patsubst %, -I%include,$(machdirs) $(platdirs))
+ head-y		:= arch/arm64/kernel/head.o
+ 
+ # The byte offset of the kernel image in RAM from the start of RAM.
++ifeq ($(CONFIG_ARCH_VEXPRESS),y)
++TEXT_OFFSET := 0x00080000
++else
+ TEXT_OFFSET := 0x00205000
++endif
+ 
+ export	TEXT_OFFSET GZFLAGS
+ 
+diff --git a/arch/arm64/kernel/setup.c b/arch/arm64/kernel/setup.c
+index 564a7bfb..f7e33768 100644
+--- a/arch/arm64/kernel/setup.c
++++ b/arch/arm64/kernel/setup.c
+@@ -342,6 +342,15 @@ struct machine_desc * __init setup_machine_fdt(phys_addr_t dt_phys)
+ 			mdesc_score = score;
+ 		}
+ 	}
++	/* The QEMU virt board has no Samsung machine descriptor. */
++#ifdef CONFIG_ARCH_VEXPRESS
++	if (!mdesc_best) {
++		static struct machine_desc virt_desc __initdata = {
++			.name = "QEMU virt",
++		};
++		mdesc_best = &virt_desc;
++	}
++#endif
+ 
+ 	machine_name = of_get_flat_dt_prop(dt_root, "model", NULL);
+ 	if (!machine_name)
+diff --git a/arch/arm64/kernel/smp_spin_table.c b/arch/arm64/kernel/smp_spin_table.c
+index 8a854003..0a161242 100644
+--- a/arch/arm64/kernel/smp_spin_table.c
++++ b/arch/arm64/kernel/smp_spin_table.c
+@@ -27,7 +27,9 @@
+ #include <asm/smp_plat.h>
+ 
+ #include <asm/io.h>
++#ifdef CONFIG_ARCH_EXYNOS
+ #include <mach/regs-pmu.h>
++#endif
+ 
+ extern void secondary_holding_pen(void);
+ volatile unsigned long secondary_holding_pen_release = INVALID_HWID;
+@@ -53,7 +55,7 @@ static void write_pen_release(u64 val)
+ static void secondary_power_up(unsigned int cpu)
+ {
+ }
+-#else
++#elif defined(CONFIG_ARCH_EXYNOS)
+ static void secondary_power_up(unsigned int cpu)
+ {
+ 	void __iomem *addr;
+@@ -66,6 +68,10 @@ static void secondary_power_up(unsigned int cpu)
+ 	}
+ 	__raw_writel(val, addr);
+ }
++#else
++static void secondary_power_up(unsigned int cpu)
++{
++}
+ #endif
+ static int smp_spin_table_cpu_init(struct device_node *dn, unsigned int cpu)
+ {
+diff --git a/arch/arm64/kernel/time.c b/arch/arm64/kernel/time.c
+index 1434faf8..19fdbbb8 100644
+--- a/arch/arm64/kernel/time.c
++++ b/arch/arm64/kernel/time.c
+@@ -65,15 +65,6 @@ unsigned long profile_pc(struct pt_regs *regs)
+ EXPORT_SYMBOL(profile_pc);
+ #endif
+ 
+-#ifndef CONFIG_CLKSRC_EXYNOS_MCT
+-static u64 sched_clock_mult __read_mostly;
+-
+-unsigned long long notrace sched_clock(void)
+-{
+-	return arch_timer_read_counter() * sched_clock_mult;
+-}
+-#endif
+-
+ int read_current_timer(unsigned long *timer_value)
+ {
+ 	*timer_value = arch_timer_read_counter();
+diff --git a/drivers/amba/bus.c b/drivers/amba/bus.c
+index 214f1e29..bcd26b5e 100644
+--- a/drivers/amba/bus.c
++++ b/drivers/amba/bus.c
+@@ -17,12 +17,15 @@
+ #include <linux/pm_runtime.h>
+ #include <linux/amba/bus.h>
+ #include <linux/sizes.h>
++#ifdef CONFIG_ARCH_EXYNOS
+ #include <plat/cpu.h>
++#endif
+ 
+ #include <asm/irq.h>
+ 
+ #define to_amba_driver(d)	container_of(d, struct amba_driver, drv)
+ 
++#ifdef CONFIG_ARCH_EXYNOS
+ void adma_init_clock(void)
+ {
+ 	unsigned int reg;
+@@ -48,6 +51,7 @@ void adma_init_clock(void)
+ 
+ 	iounmap(lpass_dma_reset);
+ }
++#endif
+ 
+ static const struct amba_id *
+ amba_lookup(const struct amba_id *table, struct amba_device *dev)
+@@ -497,8 +501,10 @@ int amba_device_add(struct amba_device *dev, struct resource *parent)
+ 	WARN_ON(dev->irq[0] == (unsigned int)-1);
+ 	WARN_ON(dev->irq[1] == (unsigned int)-1);
+ 
++	#ifdef CONFIG_ARCH_EXYNOS
+ 	if (strstr(dev_name(&dev->dev),"adma"))
+ 		adma_init_clock();
++	#endif
+ 
+ 	ret = request_resource(parent, &dev->res);
+ 	if (ret)
+diff --git a/drivers/clk/versatile/clk-vexpress.c b/drivers/clk/versatile/clk-vexpress.c
+index a4a728d0..d65b52dc 100644
+--- a/drivers/clk/versatile/clk-vexpress.c
++++ b/drivers/clk/versatile/clk-vexpress.c
+@@ -39,7 +39,7 @@ static void __init vexpress_sp810_init(void __iomem *base)
+ 		vexpress_sp810_timerclken[i] = clk_register_mux(NULL, name,
+ 				parents, 2, 0, base + SCCTRL,
+ 				SCCTRL_TIMERENnSEL_SHIFT(i), 1,
+-				0, &vexpress_sp810_lock);
++				0, &vexpress_sp810_lock, NULL, 0, 0);
+ 
+ 		if (WARN_ON(IS_ERR(vexpress_sp810_timerclken[i])))
+ 			break;
+diff --git a/drivers/gpu/Makefile b/drivers/gpu/Makefile
+index 930a72fc..4ead5fc8 100644
+--- a/drivers/gpu/Makefile
++++ b/drivers/gpu/Makefile
+@@ -1,4 +1,4 @@
+ obj-y			+= drm/ vga/ arm/
+ obj-$(CONFIG_ARM)		+= ion/
+ obj-$(CONFIG_TEGRA_HOST1X)	+= host1x/
+-obj-y			+= gpu_sysfs/
+\ No newline at end of file
++obj-$(CONFIG_ARCH_EXYNOS)	+= gpu_sysfs/
+diff --git a/drivers/platform/Kconfig b/drivers/platform/Kconfig
+index 69616aea..e07052c4 100644
+--- a/drivers/platform/Kconfig
++++ b/drivers/platform/Kconfig
+@@ -1,7 +1,4 @@
+ if X86
+ source "drivers/platform/x86/Kconfig"
+ endif
+-if GOLDFISH
+ source "drivers/platform/goldfish/Kconfig"
+-endif
+-
+diff --git a/drivers/platform/Makefile b/drivers/platform/Makefile
+index 8a44a4cd..8fd95351 100644
+--- a/drivers/platform/Makefile
++++ b/drivers/platform/Makefile
+@@ -4,4 +4,4 @@
+ 
+ obj-$(CONFIG_X86)		+= x86/
+ obj-$(CONFIG_OLPC)		+= olpc/
+-obj-$(CONFIG_GOLDFISH)		+= goldfish/
++obj-y				+= goldfish/
+diff --git a/drivers/platform/goldfish/goldfish_pipe.c b/drivers/platform/goldfish/goldfish_pipe.c
+index 4f5aa831..a9d0a0d6 100644
+--- a/drivers/platform/goldfish/goldfish_pipe.c
++++ b/drivers/platform/goldfish/goldfish_pipe.c
+@@ -46,6 +46,8 @@
+  */
+ 
+ #include <linux/module.h>
++#include <linux/of.h>
++#include <asm/page.h>
+ #include <linux/interrupt.h>
+ #include <linux/kernel.h>
+ #include <linux/spinlock.h>
+@@ -68,6 +70,7 @@
+ #define PIPE_REG_CHANNEL		0x08  /* read/write: channel id */
+ #define PIPE_REG_SIZE			0x0c  /* read/write: buffer size */
+ #define PIPE_REG_ADDRESS		0x10  /* write: physical address */
++#define PIPE_REG_ADDRESS_HIGH	0x24  /* virt ARM64 physical address extension */
+ #define PIPE_REG_WAKES			0x14  /* read: wake flags */
+ #define PIPE_REG_PARAMS_ADDR_LOW	0x18  /* read/write: batch data address */
+ #define PIPE_REG_PARAMS_ADDR_HIGH	0x1c  /* read/write: batch data address */
+@@ -135,6 +138,7 @@ static struct goldfish_pipe_dev   pipe_dev[1];
+ struct goldfish_pipe {
+ 	struct goldfish_pipe_dev *dev;
+ 	struct mutex lock;
++	void *bounce;
+ 	unsigned long flags;
+ 	wait_queue_head_t wake_queue;
+ };
+@@ -246,6 +250,7 @@ static int access_with_param(struct goldfish_pipe_dev *dev, const int cmd,
+ 	aps->channel = (unsigned long)pipe;
+ 	aps->size = avail;
+ 	aps->address = address;
++	aps->flags = (u64)address >> 32;
+ 	aps->cmd = cmd;
+ 	writel(cmd, dev->base + PIPE_REG_ACCESS_PARAMS);
+ 	/*
+@@ -298,6 +303,7 @@ static ssize_t goldfish_pipe_read_write(struct file *filp, char __user *buffer,
+ 								 : address_end;
+ 		unsigned long  avail    = next - address;
+ 		int status, wakeBit;
++		unsigned long transfer_address = __pa(pipe->bounce);
+ 
+ 		/* Ensure that the corresponding page is properly mapped */
+ 		/* FIXME: this isn't safe or sufficient - use get_user_pages */
+@@ -318,13 +324,21 @@ static ssize_t goldfish_pipe_read_write(struct file *filp, char __user *buffer,
+ 			}
+ 		}
+ 
++		/* The virt transport reads physical RAM, including on ARM64. */
++		if (is_write && copy_from_user(pipe->bounce,
++				(const void __user *)address, avail)) {
++			ret = ret ? ret : -EFAULT;
++			break;
++		}
+ 		/* Now, try to transfer the bytes in the current page */
+ 		spin_lock_irqsave(&dev->lock, irq_flags);
++		writel((u64)transfer_address >> 32,
++				dev->base + PIPE_REG_ADDRESS_HIGH);
+ 		if (access_with_param(dev, CMD_WRITE_BUFFER + cmd_offset,
+-				address, avail, pipe, &status)) {
++				transfer_address, avail, pipe, &status)) {
+ 			writel((u32)pipe, dev->base + PIPE_REG_CHANNEL);
+ 			writel(avail, dev->base + PIPE_REG_SIZE);
+-			writel(address, dev->base + PIPE_REG_ADDRESS);
++			writel(transfer_address, dev->base + PIPE_REG_ADDRESS);
+ 			writel(CMD_WRITE_BUFFER + cmd_offset,
+ 					dev->base + PIPE_REG_COMMAND);
+ 			status = readl(dev->base + PIPE_REG_STATUS);
+@@ -332,6 +346,11 @@ static ssize_t goldfish_pipe_read_write(struct file *filp, char __user *buffer,
+ 		spin_unlock_irqrestore(&dev->lock, irq_flags);
+ 
+ 		if (status > 0) { /* Correct transfer */
++			if (!is_write && copy_to_user((void __user *)address,
++						pipe->bounce, status)) {
++				ret = ret ? ret : -EFAULT;
++				break;
++			}
+ 			ret += status;
+ 			address += status;
+ 			continue;
+@@ -454,6 +473,10 @@ static irqreturn_t goldfish_pipe_interrupt(int irq, void *dev_id)
+ 
+ 		/* Convert channel to struct pipe pointer + read wake flags */
+ 		wakes = readl(dev->base + PIPE_REG_WAKES);
++#ifdef CONFIG_ARM64
++		/* Legacy channels carry the low word of a linear-map slab pointer. */
++		channel |= PAGE_OFFSET;
++#endif
+ 		pipe  = (struct goldfish_pipe *)(ptrdiff_t)channel;
+ 
+ 		/* Did the emulator just closed a pipe? */
+@@ -496,6 +519,11 @@ static int goldfish_pipe_open(struct inode *inode, struct file *file)
+ 	if (pipe == NULL)
+ 		return -ENOMEM;
+ 
++	pipe->bounce = kmalloc(PAGE_SIZE, GFP_KERNEL);
++	if (!pipe->bounce) {
++		kfree(pipe);
++		return -ENOMEM;
++	}
+ 	pipe->dev = dev;
+ 	mutex_init(&pipe->lock);
+ 	init_waitqueue_head(&pipe->wake_queue);
+@@ -507,6 +535,7 @@ static int goldfish_pipe_open(struct inode *inode, struct file *file)
+ 
+ 	status = goldfish_cmd_status(pipe, CMD_OPEN);
+ 	if (status < 0) {
++		kfree(pipe->bounce);
+ 		kfree(pipe);
+ 		return status;
+ 	}
+@@ -522,6 +551,7 @@ static int goldfish_pipe_release(struct inode *inode, struct file *filp)
+ 
+ 	/* The guest is closing the channel, so tell the emulator right now */
+ 	goldfish_cmd(pipe, CMD_CLOSE);
++	kfree(pipe->bounce);
+ 	kfree(pipe);
+ 	filp->private_data = NULL;
+ 	return 0;
+@@ -599,11 +629,18 @@ static int goldfish_pipe_remove(struct platform_device *pdev)
+ 	return 0;
+ }
+ 
++static const struct of_device_id goldfish_pipe_of_match[] = {
++	{ .compatible = "google,goldfish-pipe" },
++	{ },
++};
++MODULE_DEVICE_TABLE(of, goldfish_pipe_of_match);
++
+ static struct platform_driver goldfish_pipe = {
+ 	.probe = goldfish_pipe_probe,
+ 	.remove = goldfish_pipe_remove,
+ 	.driver = {
+-		.name = "goldfish_pipe"
++		.name = "goldfish_pipe",
++		.of_match_table = goldfish_pipe_of_match,
+ 	}
+ };
+ 
+diff --git a/drivers/staging/samsung/Kconfig b/drivers/staging/samsung/Kconfig
+index 3ee8b668..b89d18ae 100644
+--- a/drivers/staging/samsung/Kconfig
++++ b/drivers/staging/samsung/Kconfig
+@@ -8,6 +8,7 @@
+ comment "Samsung TN Features"
+ config SEC_EXT
+ 	bool "Samsung TN extension Feature"
++	depends on ARCH_EXYNOS
+ 	default y
+ 
+ config SEC_SYSFS
+diff --git a/drivers/video/vfb.c b/drivers/video/vfb.c
+index ee5985ef..879be92e 100644
+--- a/drivers/video/vfb.c
++++ b/drivers/video/vfb.c
+@@ -18,6 +18,7 @@
+ #include <linux/vmalloc.h>
+ #include <linux/delay.h>
+ #include <linux/interrupt.h>
++#include <linux/io.h>
+ #include <linux/platform_device.h>
+ 
+ #include <linux/fb.h>
+@@ -35,6 +36,14 @@
+ static void *videomemory;
+ static u_long videomemorysize = VIDEOMEMSIZE;
+ module_param(videomemorysize, ulong, 0);
++static char *mode_option = "720x1280M-32@60";
++
++/* Optional completed-frame handoff to the S6 QEMU scanout device. */
++#define VFB_QEMU_MMIO 0x090f0000
++#define VFB_QEMU_MAGIC 0x53365646
++static bool qemu_scanout;
++module_param(qemu_scanout, bool, 0);
++static void __iomem *qemu_scanout_regs;
+ 
+ /**********************************************************************
+  *
+@@ -185,6 +194,11 @@ static int vfb_check_var(struct fb_var_screeninfo *var,
+ 		var->xres_virtual = var->xres;
+ 	if (var->yres > var->yres_virtual)
+ 		var->yres_virtual = var->yres;
++#ifdef CONFIG_ARCH_VEXPRESS
++	/* Generic gralloc needs more than two framebuffer slots. */
++	if (var->yres_virtual < var->yres * 4)
++		var->yres_virtual = var->yres * 4;
++#endif
+ 	if (var->bits_per_pixel <= 1)
+ 		var->bits_per_pixel = 1;
+ 	else if (var->bits_per_pixel <= 8)
+@@ -405,6 +419,20 @@ static int vfb_pan_display(struct fb_var_screeninfo *var,
+ 		info->var.vmode |= FB_VMODE_YWRAP;
+ 	else
+ 		info->var.vmode &= ~FB_VMODE_YWRAP;
++	if (qemu_scanout_regs) {
++		unsigned long offset = (unsigned long)var->yoffset *
++			info->fix.line_length + var->xoffset *
++			(info->var.bits_per_pixel / 8);
++
++		writeq((unsigned long)videomemory + offset,
++		       qemu_scanout_regs + 8);
++		writel(info->fix.line_length, qemu_scanout_regs + 16);
++		writel(info->var.xres, qemu_scanout_regs + 20);
++		writel(info->var.yres, qemu_scanout_regs + 24);
++		/* QEMU copies the posted buffer before this ioctl returns. */
++		wmb();
++		writel(1, qemu_scanout_regs + 28);
++	}
+ 	return 0;
+ }
+ 
+@@ -471,6 +499,8 @@ static int __init vfb_setup(char *options)
+ 		/* Test disable for backwards compatibility */
+ 		if (!strcmp(this_opt, "disable"))
+ 			vfb_enable = 0;
++		else
++			mode_option = this_opt;
+ 	}
+ 	return 1;
+ }
+@@ -506,8 +536,8 @@ static int vfb_probe(struct platform_device *dev)
+ 	info->screen_base = (char __iomem *)videomemory;
+ 	info->fbops = &vfb_ops;
+ 
+-	retval = fb_find_mode(&info->var, info, NULL,
+-			      NULL, 0, NULL, 8);
++	retval = fb_find_mode(&info->var, info, mode_option,
++			      NULL, 0, NULL, 32);
+ 
+ 	if (!retval || (retval == 4))
+ 		info->var = vfb_default;
+@@ -526,6 +556,18 @@ static int vfb_probe(struct platform_device *dev)
+ 	if (retval < 0)
+ 		goto err2;
+ 	platform_set_drvdata(dev, info);
++	if (qemu_scanout) {
++		qemu_scanout_regs = ioremap(VFB_QEMU_MMIO, 0x1000);
++		if (!qemu_scanout_regs ||
++		    readl(qemu_scanout_regs) != VFB_QEMU_MAGIC) {
++			if (qemu_scanout_regs)
++				iounmap(qemu_scanout_regs);
++			qemu_scanout_regs = NULL;
++			pr_warn("vfb: QEMU completed-frame device unavailable\n");
++		} else {
++			pr_info("vfb: QEMU completed-frame scanout enabled\n");
++		}
++	}
+ 
+ 	printk(KERN_INFO
+ 	       "fb%d: Virtual frame buffer device, using %ldK of video memory\n",
+@@ -545,6 +587,10 @@ static int vfb_remove(struct platform_device *dev)
+ 	struct fb_info *info = platform_get_drvdata(dev);
+ 
+ 	if (info) {
++		if (qemu_scanout_regs) {
++			iounmap(qemu_scanout_regs);
++			qemu_scanout_regs = NULL;
++		}
+ 		unregister_framebuffer(info);
+ 		rvfree(videomemory, videomemorysize);
+ 		fb_dealloc_cmap(&info->cmap);
+diff --git a/drivers/virtio/Kconfig b/drivers/virtio/Kconfig
+index c6683f2e..83aa7d73 100644
+--- a/drivers/virtio/Kconfig
++++ b/drivers/virtio/Kconfig
+@@ -31,6 +31,14 @@ config VIRTIO_BALLOON
+ 
+ 	 If unsure, say M.
+ 
++config VIRTIO_INPUT
++	tristate "Virtio input driver"
++	depends on VIRTIO && INPUT
++	---help---
++	 This driver supports virtual touchscreens and keyboards on QEMU.
++
++	 If unsure, say N.
++
+  config VIRTIO_MMIO
+ 	tristate "Platform bus driver for memory mapped virtio devices"
+ 	depends on HAS_IOMEM
+diff --git a/drivers/virtio/Makefile b/drivers/virtio/Makefile
+index 90766356..45aeaac8 100644
+--- a/drivers/virtio/Makefile
++++ b/drivers/virtio/Makefile
+@@ -2,3 +2,4 @@ obj-$(CONFIG_VIRTIO) += virtio.o virtio_ring.o
+ obj-$(CONFIG_VIRTIO_MMIO) += virtio_mmio.o
+ obj-$(CONFIG_VIRTIO_PCI) += virtio_pci.o
+ obj-$(CONFIG_VIRTIO_BALLOON) += virtio_balloon.o
++obj-$(CONFIG_VIRTIO_INPUT) += virtio_input.o
+diff --git a/drivers/virtio/virtio_input.c b/drivers/virtio/virtio_input.c
+new file mode 100644
+index 00000000..b68d4d9a
+--- /dev/null
++++ b/drivers/virtio/virtio_input.c
+@@ -0,0 +1,359 @@
++/* Backport of Linux 4.4 virtio-input for this 3.10 ARM64 emulator kernel. */
++#include <linux/module.h>
++#include <linux/virtio.h>
++#include <linux/virtio_config.h>
++#include <linux/input.h>
++
++#include <uapi/linux/virtio_ids.h>
++#include <uapi/linux/virtio_input.h>
++
++/* The 3.10 virtio config API predates these field accessors. */
++#define virtio_cwrite(vdev, type, member, ptr) \
++	(vdev)->config->set((vdev), offsetof(type, member), (ptr), sizeof(*(ptr)))
++#define virtio_cread(vdev, type, member, ptr) \
++	(vdev)->config->get((vdev), offsetof(type, member), (ptr), sizeof(*(ptr)))
++#define virtio_cread_bytes(vdev, offset, ptr, len) \
++	(vdev)->config->get((vdev), (offset), (ptr), (len))
++
++struct virtio_input {
++	struct virtio_device       *vdev;
++	struct input_dev           *idev;
++	char                       name[64];
++	char                       serial[64];
++	char                       phys[64];
++	struct virtqueue           *evt, *sts;
++	struct virtio_input_event  evts[64];
++	spinlock_t                 lock;
++	bool                       ready;
++};
++
++static void virtinput_queue_evtbuf(struct virtio_input *vi,
++				   struct virtio_input_event *evtbuf)
++{
++	struct scatterlist sg[1];
++
++	sg_init_one(sg, evtbuf, sizeof(*evtbuf));
++	virtqueue_add_inbuf(vi->evt, sg, 1, evtbuf, GFP_ATOMIC);
++}
++
++static void virtinput_recv_events(struct virtqueue *vq)
++{
++	struct virtio_input *vi = vq->vdev->priv;
++	struct virtio_input_event *event;
++	unsigned long flags;
++	unsigned int len;
++
++	spin_lock_irqsave(&vi->lock, flags);
++	if (vi->ready) {
++		while ((event = virtqueue_get_buf(vi->evt, &len)) != NULL) {
++			spin_unlock_irqrestore(&vi->lock, flags);
++			input_event(vi->idev,
++				    le16_to_cpu(event->type),
++				    le16_to_cpu(event->code),
++				    le32_to_cpu(event->value));
++			spin_lock_irqsave(&vi->lock, flags);
++			virtinput_queue_evtbuf(vi, event);
++		}
++		virtqueue_kick(vq);
++	}
++	spin_unlock_irqrestore(&vi->lock, flags);
++}
++
++/*
++ * On error we are losing the status update, which isn't critical as
++ * this is typically used for stuff like keyboard leds.
++ */
++static int virtinput_send_status(struct virtio_input *vi,
++				 u16 type, u16 code, s32 value)
++{
++	struct virtio_input_event *stsbuf;
++	struct scatterlist sg[1];
++	unsigned long flags;
++	int rc;
++
++	stsbuf = kzalloc(sizeof(*stsbuf), GFP_ATOMIC);
++	if (!stsbuf)
++		return -ENOMEM;
++
++	stsbuf->type  = cpu_to_le16(type);
++	stsbuf->code  = cpu_to_le16(code);
++	stsbuf->value = cpu_to_le32(value);
++	sg_init_one(sg, stsbuf, sizeof(*stsbuf));
++
++	spin_lock_irqsave(&vi->lock, flags);
++	if (vi->ready) {
++		rc = virtqueue_add_outbuf(vi->sts, sg, 1, stsbuf, GFP_ATOMIC);
++		virtqueue_kick(vi->sts);
++	} else {
++		rc = -ENODEV;
++	}
++	spin_unlock_irqrestore(&vi->lock, flags);
++
++	if (rc != 0)
++		kfree(stsbuf);
++	return rc;
++}
++
++static void virtinput_recv_status(struct virtqueue *vq)
++{
++	struct virtio_input *vi = vq->vdev->priv;
++	struct virtio_input_event *stsbuf;
++	unsigned long flags;
++	unsigned int len;
++
++	spin_lock_irqsave(&vi->lock, flags);
++	while ((stsbuf = virtqueue_get_buf(vi->sts, &len)) != NULL)
++		kfree(stsbuf);
++	spin_unlock_irqrestore(&vi->lock, flags);
++}
++
++static int virtinput_status(struct input_dev *idev, unsigned int type,
++			    unsigned int code, int value)
++{
++	struct virtio_input *vi = input_get_drvdata(idev);
++
++	return virtinput_send_status(vi, type, code, value);
++}
++
++static u8 virtinput_cfg_select(struct virtio_input *vi,
++			       u8 select, u8 subsel)
++{
++	u8 size;
++
++	virtio_cwrite(vi->vdev, struct virtio_input_config, select, &select);
++	virtio_cwrite(vi->vdev, struct virtio_input_config, subsel, &subsel);
++	virtio_cread(vi->vdev, struct virtio_input_config, size, &size);
++	return size;
++}
++
++static void virtinput_cfg_bits(struct virtio_input *vi, int select, int subsel,
++			       unsigned long *bits, unsigned int bitcount)
++{
++	unsigned int bit;
++	u8 *virtio_bits;
++	u8 bytes;
++
++	bytes = virtinput_cfg_select(vi, select, subsel);
++	if (!bytes)
++		return;
++	if (bitcount > bytes * 8)
++		bitcount = bytes * 8;
++
++	/*
++	 * Bitmap in virtio config space is a simple stream of bytes,
++	 * with the first byte carrying bits 0-7, second bits 8-15 and
++	 * so on.
++	 */
++	virtio_bits = kzalloc(bytes, GFP_KERNEL);
++	if (!virtio_bits)
++		return;
++	virtio_cread_bytes(vi->vdev, offsetof(struct virtio_input_config,
++					      u.bitmap),
++			   virtio_bits, bytes);
++	for (bit = 0; bit < bitcount; bit++) {
++		if (virtio_bits[bit / 8] & (1 << (bit % 8)))
++			__set_bit(bit, bits);
++	}
++	kfree(virtio_bits);
++
++	if (select == VIRTIO_INPUT_CFG_EV_BITS)
++		__set_bit(subsel, vi->idev->evbit);
++}
++
++static void virtinput_cfg_abs(struct virtio_input *vi, int abs)
++{
++	u32 mi, ma, re, fu, fl;
++
++	virtinput_cfg_select(vi, VIRTIO_INPUT_CFG_ABS_INFO, abs);
++	virtio_cread(vi->vdev, struct virtio_input_config, u.abs.min, &mi);
++	virtio_cread(vi->vdev, struct virtio_input_config, u.abs.max, &ma);
++	virtio_cread(vi->vdev, struct virtio_input_config, u.abs.res, &re);
++	virtio_cread(vi->vdev, struct virtio_input_config, u.abs.fuzz, &fu);
++	virtio_cread(vi->vdev, struct virtio_input_config, u.abs.flat, &fl);
++	input_set_abs_params(vi->idev, abs, mi, ma, fu, fl);
++	vi->idev->absinfo[abs].resolution = re;
++}
++
++static int virtinput_init_vqs(struct virtio_input *vi)
++{
++	struct virtqueue *vqs[2];
++	vq_callback_t *cbs[] = { virtinput_recv_events,
++				 virtinput_recv_status };
++	static const char *names[] = { "events", "status" };
++	int err;
++
++	err = vi->vdev->config->find_vqs(vi->vdev, 2, vqs, cbs, names);
++	if (err)
++		return err;
++	vi->evt = vqs[0];
++	vi->sts = vqs[1];
++
++	return 0;
++}
++
++static void virtinput_fill_evt(struct virtio_input *vi)
++{
++	unsigned long flags;
++	int i, size;
++
++	spin_lock_irqsave(&vi->lock, flags);
++	size = virtqueue_get_vring_size(vi->evt);
++	if (size > ARRAY_SIZE(vi->evts))
++		size = ARRAY_SIZE(vi->evts);
++	for (i = 0; i < size; i++)
++		virtinput_queue_evtbuf(vi, &vi->evts[i]);
++	virtqueue_kick(vi->evt);
++	spin_unlock_irqrestore(&vi->lock, flags);
++}
++
++static int virtinput_probe(struct virtio_device *vdev)
++{
++	struct virtio_input *vi;
++	unsigned long flags;
++	size_t size;
++	int abs, err;
++
++	vi = kzalloc(sizeof(*vi), GFP_KERNEL);
++	if (!vi)
++		return -ENOMEM;
++
++	vdev->priv = vi;
++	vi->vdev = vdev;
++	spin_lock_init(&vi->lock);
++
++	err = virtinput_init_vqs(vi);
++	if (err)
++		goto err_init_vq;
++
++	vi->idev = input_allocate_device();
++	if (!vi->idev) {
++		err = -ENOMEM;
++		goto err_input_alloc;
++	}
++	input_set_drvdata(vi->idev, vi);
++
++	size = virtinput_cfg_select(vi, VIRTIO_INPUT_CFG_ID_NAME, 0);
++	virtio_cread_bytes(vi->vdev, offsetof(struct virtio_input_config,
++					      u.string),
++			   vi->name, min(size, sizeof(vi->name)));
++	size = virtinput_cfg_select(vi, VIRTIO_INPUT_CFG_ID_SERIAL, 0);
++	virtio_cread_bytes(vi->vdev, offsetof(struct virtio_input_config,
++					      u.string),
++			   vi->serial, min(size, sizeof(vi->serial)));
++	snprintf(vi->phys, sizeof(vi->phys),
++		 "virtio%d/input0", vdev->index);
++	vi->idev->name = vi->name;
++	vi->idev->phys = vi->phys;
++	vi->idev->uniq = vi->serial;
++
++	size = virtinput_cfg_select(vi, VIRTIO_INPUT_CFG_ID_DEVIDS, 0);
++	if (size >= sizeof(struct virtio_input_devids)) {
++		virtio_cread(vi->vdev, struct virtio_input_config,
++			     u.ids.bustype, &vi->idev->id.bustype);
++		virtio_cread(vi->vdev, struct virtio_input_config,
++			     u.ids.vendor, &vi->idev->id.vendor);
++		virtio_cread(vi->vdev, struct virtio_input_config,
++			     u.ids.product, &vi->idev->id.product);
++		virtio_cread(vi->vdev, struct virtio_input_config,
++			     u.ids.version, &vi->idev->id.version);
++	} else {
++		vi->idev->id.bustype = BUS_VIRTUAL;
++	}
++
++	virtinput_cfg_bits(vi, VIRTIO_INPUT_CFG_PROP_BITS, 0,
++			   vi->idev->propbit, INPUT_PROP_CNT);
++	size = virtinput_cfg_select(vi, VIRTIO_INPUT_CFG_EV_BITS, EV_REP);
++	if (size)
++		__set_bit(EV_REP, vi->idev->evbit);
++
++	vi->idev->dev.parent = &vdev->dev;
++	vi->idev->event = virtinput_status;
++
++	/* device -> kernel */
++	virtinput_cfg_bits(vi, VIRTIO_INPUT_CFG_EV_BITS, EV_KEY,
++			   vi->idev->keybit, KEY_CNT);
++	virtinput_cfg_bits(vi, VIRTIO_INPUT_CFG_EV_BITS, EV_REL,
++			   vi->idev->relbit, REL_CNT);
++	virtinput_cfg_bits(vi, VIRTIO_INPUT_CFG_EV_BITS, EV_ABS,
++			   vi->idev->absbit, ABS_CNT);
++	virtinput_cfg_bits(vi, VIRTIO_INPUT_CFG_EV_BITS, EV_MSC,
++			   vi->idev->mscbit, MSC_CNT);
++	virtinput_cfg_bits(vi, VIRTIO_INPUT_CFG_EV_BITS, EV_SW,
++			   vi->idev->swbit,  SW_CNT);
++
++	/* kernel -> device */
++	virtinput_cfg_bits(vi, VIRTIO_INPUT_CFG_EV_BITS, EV_LED,
++			   vi->idev->ledbit, LED_CNT);
++	virtinput_cfg_bits(vi, VIRTIO_INPUT_CFG_EV_BITS, EV_SND,
++			   vi->idev->sndbit, SND_CNT);
++
++	if (test_bit(EV_ABS, vi->idev->evbit)) {
++		for (abs = 0; abs < ABS_CNT; abs++) {
++			if (!test_bit(abs, vi->idev->absbit))
++				continue;
++			virtinput_cfg_abs(vi, abs);
++		}
++	}
++
++	vi->ready = true;
++	err = input_register_device(vi->idev);
++	if (err)
++		goto err_input_register;
++
++	virtinput_fill_evt(vi);
++	return 0;
++
++err_input_register:
++	spin_lock_irqsave(&vi->lock, flags);
++	vi->ready = false;
++	spin_unlock_irqrestore(&vi->lock, flags);
++	input_free_device(vi->idev);
++err_input_alloc:
++	vdev->config->del_vqs(vdev);
++err_init_vq:
++	kfree(vi);
++	return err;
++}
++
++static void virtinput_remove(struct virtio_device *vdev)
++{
++	struct virtio_input *vi = vdev->priv;
++	void *buf;
++	unsigned long flags;
++
++	spin_lock_irqsave(&vi->lock, flags);
++	vi->ready = false;
++	spin_unlock_irqrestore(&vi->lock, flags);
++
++	input_unregister_device(vi->idev);
++	vdev->config->reset(vdev);
++	while ((buf = virtqueue_detach_unused_buf(vi->sts)) != NULL)
++		kfree(buf);
++	vdev->config->del_vqs(vdev);
++	kfree(vi);
++}
++
++static unsigned int features[] = {
++	/* none */
++};
++static struct virtio_device_id id_table[] = {
++	{ VIRTIO_ID_INPUT, VIRTIO_DEV_ANY_ID },
++	{ 0 },
++};
++
++static struct virtio_driver virtio_input_driver = {
++	.driver.name         = KBUILD_MODNAME,
++	.driver.owner        = THIS_MODULE,
++	.feature_table       = features,
++	.feature_table_size  = ARRAY_SIZE(features),
++	.id_table            = id_table,
++	.probe               = virtinput_probe,
++	.remove              = virtinput_remove,
++};
++
++module_virtio_driver(virtio_input_driver);
++MODULE_DEVICE_TABLE(virtio, id_table);
++
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("Virtio input device driver");
++MODULE_AUTHOR("Gerd Hoffmann <kraxel@redhat.com>");
+diff --git a/include/uapi/linux/virtio_ids.h b/include/uapi/linux/virtio_ids.h
+index 284fc3a0..c789a6bd 100644
+--- a/include/uapi/linux/virtio_ids.h
++++ b/include/uapi/linux/virtio_ids.h
+@@ -39,5 +39,6 @@
+ #define VIRTIO_ID_9P		9 /* 9p virtio console */
+ #define VIRTIO_ID_RPROC_SERIAL 11 /* virtio remoteproc serial link */
+ #define VIRTIO_ID_CAIF	       12 /* Virtio caif */
++#define VIRTIO_ID_INPUT       18 /* virtio input */
+ 
+ #endif /* _LINUX_VIRTIO_IDS_H */
+diff --git a/include/uapi/linux/virtio_input.h b/include/uapi/linux/virtio_input.h
+new file mode 100644
+index 00000000..a7fe5c8f
+--- /dev/null
++++ b/include/uapi/linux/virtio_input.h
+@@ -0,0 +1,76 @@
++#ifndef _LINUX_VIRTIO_INPUT_H
++#define _LINUX_VIRTIO_INPUT_H
++/* This header is BSD licensed so anyone can use the definitions to implement
++ * compatible drivers/servers.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ * 3. Neither the name of IBM nor the names of its contributors
++ *    may be used to endorse or promote products derived from this software
++ *    without specific prior written permission.
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
++ * FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL IBM OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
++ * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
++ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
++ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
++ * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE. */
++
++#include <linux/types.h>
++
++enum virtio_input_config_select {
++	VIRTIO_INPUT_CFG_UNSET      = 0x00,
++	VIRTIO_INPUT_CFG_ID_NAME    = 0x01,
++	VIRTIO_INPUT_CFG_ID_SERIAL  = 0x02,
++	VIRTIO_INPUT_CFG_ID_DEVIDS  = 0x03,
++	VIRTIO_INPUT_CFG_PROP_BITS  = 0x10,
++	VIRTIO_INPUT_CFG_EV_BITS    = 0x11,
++	VIRTIO_INPUT_CFG_ABS_INFO   = 0x12,
++};
++
++struct virtio_input_absinfo {
++	__u32 min;
++	__u32 max;
++	__u32 fuzz;
++	__u32 flat;
++	__u32 res;
++};
++
++struct virtio_input_devids {
++	__u16 bustype;
++	__u16 vendor;
++	__u16 product;
++	__u16 version;
++};
++
++struct virtio_input_config {
++	__u8    select;
++	__u8    subsel;
++	__u8    size;
++	__u8    reserved[5];
++	union {
++		char string[128];
++		__u8 bitmap[128];
++		struct virtio_input_absinfo abs;
++		struct virtio_input_devids ids;
++	} u;
++};
++
++struct virtio_input_event {
++	__le16 type;
++	__le16 code;
++	__le32 value;
++};
++
++#endif /* _LINUX_VIRTIO_INPUT_H */
+diff --git a/kernel/panic.c b/kernel/panic.c
+index 2ee4f530..d8387d4b 100644
+--- a/kernel/panic.c
++++ b/kernel/panic.c
+@@ -138,7 +138,9 @@ void panic(const char *fmt, ...)
+ #if defined(CONFIG_SOC_EXYNOS5422) || defined(CONFIG_SOC_EXYNOS5430)
+ 	show_exynos_cmu();
+ #endif
++#ifdef CONFIG_SCHED_DEBUG
+ 	sysrq_sched_debug_show();
++#endif
+ 
+ 	/*
+ 	 * If we have crashed and we have a crash kernel loaded let it handle
+diff --git a/security/mstdrv/Kconfig b/security/mstdrv/Kconfig
+index 9eb5b474..e9b462a8 100755
+--- a/security/mstdrv/Kconfig
++++ b/security/mstdrv/Kconfig
+@@ -1,7 +1,7 @@
+ #
+ config MST_LDO
+ 	def_bool y
+-	depends on !SEC_FACTORY
++	depends on ARCH_EXYNOS && !SEC_FACTORY
+ 
+ config MST_NOBLE_TARGET
+ 	def_bool n
+@@ -10,4 +10,3 @@ config MST_NOBLE_TARGET
+ config MST_ZEN_TARGET
+ 	def_bool n
+ 	bool "mst solution for zen target"
+-

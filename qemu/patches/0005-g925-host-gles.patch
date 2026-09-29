@@ -1,0 +1,31 @@
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -3240,12 +3240,28 @@
+ 
+     vms->fw_cfg = create_fw_cfg(vms, &address_space_memory);
+     rom_set_fw(vms->fw_cfg);
+ 
+     create_platform_bus(vms);
+ 
++    if (g_strcmp0(g_getenv("G925_HOST_GLES"), "1") == 0) {
++        DeviceState *pipe = qdev_new("g925-goldfish-pipe");
++        SysBusDevice *bus = SYS_BUS_DEVICE(pipe);
++        const char *node = "/goldfish_pipe@90e0000";
++
++        sysbus_realize_and_unref(bus, &error_fatal);
++        sysbus_mmio_map(bus, 0, 0x090e0000);
++        sysbus_connect_irq(bus, 0, qdev_get_gpio_in(vms->gic, 70));
++        qemu_fdt_add_subnode(machine->fdt, node);
++        qemu_fdt_setprop_string(machine->fdt, node, "compatible",
++                               "google,goldfish-pipe");
++        qemu_fdt_setprop_sized_cells(machine->fdt, node, "reg",
++                                    2, 0x090e0000, 2, 0x1000);
++        qemu_fdt_setprop_cells(machine->fdt, node, "interrupts", 0, 70, 4);
++    }
++
+     if (machine->nvdimms_state->is_enabled) {
+         const struct AcpiGenericAddress arm_virt_nvdimm_acpi_dsmio = {
+             .space_id = AML_AS_SYSTEM_MEMORY,
+             .address = vms->memmap[VIRT_NVDIMM_ACPI].base,
+             .bit_width = NVDIMM_ACPI_IO_LEN << 3
+         };

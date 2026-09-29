@@ -1,0 +1,67 @@
+--- a/ui/gtk.c
++++ b/ui/gtk.c
+@@ -185,6 +185,22 @@
+ 
+     page = gtk_notebook_get_current_page(GTK_NOTEBOOK(s->notebook));
+     return gd_vc_find_by_page(s, page);
++}
++
++static void gd_phone_navigation(GtkButton *button, gpointer opaque)
++{
++    GtkDisplayState *s = opaque;
++    VirtualConsole *vc = gd_vc_find_current(s);
++    unsigned int key = GPOINTER_TO_UINT(g_object_get_data(
++        G_OBJECT(button), "phone-key"));
++
++    if (!vc || vc->type != GD_VC_GFX) {
++        return;
++    }
++    qemu_input_event_send_key_linux(vc->gfx.dcl.con, key, true);
++    qemu_input_event_send_key_delay(80);
++    qemu_input_event_send_key_linux(vc->gfx.dcl.con, key, false);
++    gtk_widget_grab_focus(vc->gfx.drawing_area);
+ }
+ 
+ static bool gd_is_grab_active(GtkDisplayState *s)
+@@ -2773,6 +2789,26 @@
+     gtk_box_pack_start(GTK_BOX(s->vbox), s->menu_bar, FALSE, TRUE, 0);
+     gtk_box_pack_start(GTK_BOX(s->vbox), s->notebook, TRUE, TRUE, 0);
+ 
++    if (g_strcmp0(g_getenv("G925_PHONE_NAV"), "1") == 0) {
++        const char *labels[] = { "Recents", "Home", "Back" };
++        const unsigned int keys[] = { 254, KEY_HOMEPAGE, KEY_BACK };
++        GtkWidget *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
++
++        gtk_box_set_homogeneous(GTK_BOX(bar), TRUE);
++        for (int i = 0; i < 3; i++) {
++            GtkWidget *button = gtk_button_new_with_label(labels[i]);
++
++            gtk_widget_set_size_request(button, -1, 42);
++            gtk_widget_set_can_focus(button, FALSE);
++            g_object_set_data(G_OBJECT(button), "phone-key",
++                              GUINT_TO_POINTER(keys[i]));
++            g_signal_connect(button, "clicked",
++                             G_CALLBACK(gd_phone_navigation), s);
++            gtk_box_pack_start(GTK_BOX(bar), button, TRUE, TRUE, 0);
++        }
++        gtk_box_pack_start(GTK_BOX(s->vbox), bar, FALSE, TRUE, 0);
++    }
++
+     gtk_container_add(GTK_CONTAINER(s->window), s->vbox);
+ 
+     gtk_widget_show_all(s->window);
+--- a/hw/input/virtio-input-hid.c
++++ b/hw/input/virtio-input-hid.c
+@@ -319,6 +319,12 @@
+         ext.u.bitmap[i / 8] |= (1 << (i % 8));
+     }
+ 
++    if (g_strcmp0(g_getenv("G925_PHONE_NAV"), "1") == 0) {
++        /* Samsung Generic.kl maps Linux key 254 to APP_SWITCH. */
++        ext.u.bitmap[254 / 8] |= 1 << (254 % 8);
++        ext.size = MAX(ext.size, 254 / 8 + 1);
++    }
++
+     virtio_input_add_config(vinput, &ext);
+ }
+ 

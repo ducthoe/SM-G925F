@@ -1,0 +1,49 @@
+--- a/hw/input/virtio-input-hid.c
++++ b/hw/input/virtio-input-hid.c
+@@ -36,6 +36,12 @@
+     [INPUT_BUTTON_TOUCH]             = BTN_TOUCH,
+ };
+ 
++/* Present host left-click as a direct finger contact on the phone screen. */
++static const unsigned short keymap_tablet_touch[INPUT_BUTTON__MAX] = {
++    [INPUT_BUTTON_LEFT] = BTN_TOUCH,
++    [INPUT_BUTTON_TOUCH] = BTN_TOUCH,
++};
++
+ static const unsigned short axismap_rel[INPUT_AXIS__MAX] = {
+     [INPUT_AXIS_X]                   = REL_X,
+     [INPUT_AXIS_Y]                   = REL_Y,
+@@ -103,8 +109,14 @@
+                                       ? 1 : -1);
+             virtio_input_send(vinput, &event);
+         } else if (keymap_button[evt->btn.button]) {
++            unsigned short code = keymap_button[evt->btn.button];
++
++            if (evt->btn.button == INPUT_BUTTON_LEFT &&
++                object_dynamic_cast(OBJECT(dev), TYPE_VIRTIO_TABLET)) {
++                code = BTN_TOUCH;
++            }
+             event.type  = cpu_to_le16(EV_KEY);
+-            event.code  = cpu_to_le16(keymap_button[evt->btn.button]);
++            event.code  = cpu_to_le16(code);
+             event.value = cpu_to_le32(evt->btn.down ? 1 : 0);
+             virtio_input_send(vinput, &event);
+         } else {
+@@ -429,12 +441,15 @@
+ {
+     VirtIOInputHID *vhid = VIRTIO_INPUT_HID(obj);
+     VirtIOInput *vinput = VIRTIO_INPUT(obj);
++    static const unsigned short direct[] = { INPUT_PROP_DIRECT };
+ 
+     vhid->handler = &virtio_tablet_handler;
+     virtio_input_init_config(vinput, virtio_tablet_config);
+-    virtio_input_extend_config(vinput, keymap_button,
+-                               ARRAY_SIZE(keymap_button),
++    virtio_input_extend_config(vinput, keymap_tablet_touch,
++                               ARRAY_SIZE(keymap_tablet_touch),
+                                VIRTIO_INPUT_CFG_EV_BITS, EV_KEY);
++    virtio_input_extend_config(vinput, direct, ARRAY_SIZE(direct),
++                               VIRTIO_INPUT_CFG_PROP_BITS, 0);
+ }
+ 
+ static const TypeInfo virtio_tablet_info = {

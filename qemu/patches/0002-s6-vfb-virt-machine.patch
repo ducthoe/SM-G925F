@@ -1,0 +1,12 @@
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -3230,6 +3230,10 @@
+      */
+     create_virtio_devices(vms);
+ 
++    /* Present the S6 Edge kernel's vmalloc-backed virtual framebuffer. */
++    sysbus_realize_and_unref(SYS_BUS_DEVICE(qdev_new("s6-vfb-display")),
++                             &error_fatal);
++
+     vms->fw_cfg = create_fw_cfg(vms, &address_space_memory);
+     rom_set_fw(vms->fw_cfg);
