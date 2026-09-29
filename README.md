@@ -90,6 +90,18 @@ Add these to `./run.sh` (or after the firmware path on the first build):
 
 The default is up to **4 GB RAM and four virtual CPUs**. CPU emulation and software graphics can limit performance.
 
+## Install APKs
+
+In a terminal on your PC, open the folder containing the APK and run:
+
+```sh
+python3 -m http.server 8000 --bind 127.0.0.1
+```
+
+In Android's browser, visit **http://10.0.2.2:8000**, download the APK, and open it from Downloads. Enable **Lock screen and security → Unknown sources** when asked. Use ARM/ARM64 APKs compatible with Android 5.0 (API 21).
+
+The emulated SD card uses your phone's saved data partition; downloaded files persist between launches.
+
 ## Common problems
 
 **The build failed:** read the error and the log path printed in the terminal. Fix the reported problem and run the same command again; completed stages are kept. Package lists are in [the dependency installer](scripts/install-dependencies.sh).
@@ -99,6 +111,8 @@ The default is up to **4 GB RAM and four virtual CPUs**. CPU emulation and softw
 **The screen is black or graphics initialization fails:** check `logs/renderer.log`, then try `--renderer software`. Launch from a terminal in your graphical desktop.
 
 **There is no internet:** turn on Wi-Fi in Android and connect to **QEMU Wi-Fi**. It uses your PC's internet connection; it does not scan nearby physical access points.
+
+**The browser reports no SD card:** update with `git pull`, close the current QEMU window, and launch with `./run.sh` again. The updated ramdisk starts the compatible emulated-storage daemon; your existing data is kept.
 
 **There is no sound:** check Android's volume, the selected Linux audio output, and `logs/audio-host.log`. Playback supports PipeWire, PulseAudio, or ALSA.
 

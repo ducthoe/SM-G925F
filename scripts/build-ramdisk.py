@@ -51,13 +51,19 @@ def build(source, output):
             rc.write_text(text)
         fstab = tree / "fstab.samsungexynos7420"
         fstab.write_text(replace_once(fstab.read_text(), "wait,support_scfs,verify", "wait"))
+        hardware = tree / "init.samsungexynos7420.rc"
+        hardware.write_text(replace_once(hardware.read_text(),
+            "service sdcard /system/bin/sdcard -u 1023 -g 1023 -l -r /data/media /mnt/shell/emulated\n"
+            "    class late_start\n    oneshot\n",
+            "service sdcard /sbin/g925-sdcard -u 1023 -g 1023 -l /data/media /mnt/shell/emulated\n"
+            "    class late_start\n    seclabel u:r:sdcardd:s0\n"))
         uevent = tree / "ueventd.rc"
         uevent.write_text(uevent.read_text() + "\n/dev/goldfish_pipe 0666 root root\n")
         (tree / "sbin").mkdir(exist_ok=True)
         files = {"busybox": WORK / "tools/busybox", "virtio_net.ko": WORK / "wifi/virtio_net.ko",
                  "dhd.ko": WORK / "wifi/dhd.ko", "g925-first-boot.sh": ROOT / "guest/first-boot.sh",
                  "g925_headset.ko": WORK / "audio/g925_headset.ko", "audio-relay": WORK / "audio/audio-relay",
-                 "audio-start.sh": ROOT / "guest/audio-start.sh"}
+                 "audio-start.sh": ROOT / "guest/audio-start.sh", "g925-sdcard": WORK / "storage/g925-sdcard"}
         for name, original in files.items():
             target = tree / "sbin" / name
             shutil.copyfile(original, target)

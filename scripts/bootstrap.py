@@ -219,6 +219,7 @@ def prepare_images(firmware, firmware_key):
         stamp.write_text(system_key + "\n")
     ramdisk_key = fingerprint(ROOT / "scripts/build-ramdisk.py", ROOT / "guest", WORK / "wifi/virtio_net.ko", WORK / "wifi/dhd.ko",
                               WORK / "audio/audio-relay", WORK / "audio/g925_headset.ko",
+                              WORK / "storage/g925-sdcard",
                               WORK / "tools/busybox", extra=firmware_key)
     stamp = firmware / ".ramdisk-build"
     if not cached(stamp, ramdisk_key, [ramdisk]):
@@ -256,6 +257,30 @@ def build_audio(gcc, ndk, jobs, firmware):
         command([compiler, "-shared", "-fPIC", "-O2", "-Wl,-Bsymbolic",
                  "-I" + str(WORK / "aosp-core-headers/include"), "-I" + str(WORK / "aosp-hardware-headers/include"),
                  ROOT / "qemu/audio_stock_wrapper.c", "-ldl", "-o", libraries / "audio.primary.g925emu.so"], log="audio-build.log")
+    stamp.write_text(key + "\n")
+
+
+def build_storage(ndk, firmware, firmware_key):
+    source = WORK / "aosp-core-headers/sdcard/sdcard.c"
+    header = WORK / "kernel-source/include/uapi/linux/fuse.h"
+    storage = WORK / "storage"
+    binary = storage / "g925-sdcard"
+    key = fingerprint(source, header, ROOT / "scripts/bootstrap.py",
+                      extra=firmware_key + VERSIONS["downloads"]["ndk"]["sha256"])
+    stamp = storage / ".g925-build"
+    if cached(stamp, key, [binary]):
+        print("Using cached emulated-storage daemon.", flush=True)
+        return
+    include = storage / "include/linux"
+    include.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(header, include / "fuse.h")
+    # Use the kernel's FUSE protocol and the firmware's libcutils ABI.
+    for name in ("libcutils.so", "liblog.so"):
+        dump(firmware / "stock.raw.img", "/lib64/" + name, storage / name)
+    compiler = ndk / "toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
+    command([compiler, "-O2", "-Wno-deprecated-declarations", "-DHAVE_SYS_UIO_H", "-DPAGESIZE=4096",
+             "-I" + str(storage / "include"), "-I" + str(WORK / "aosp-core-headers/include"),
+             source, storage / "libcutils.so", storage / "liblog.so", "-o", binary], log="storage-build.log")
     stamp.write_text(key + "\n")
 
 
@@ -304,6 +329,7 @@ def main():
         kernel = build_kernel(gcc, args.jobs)
         build_graphics(args.downloads.resolve(), ndk, firmware, firmware_key, args.jobs)
         build_audio(gcc, ndk, args.jobs, firmware)
+        build_storage(ndk, firmware, firmware_key)
         system, ramdisk = prepare_images(firmware, firmware_key)
         from launcher import prepare_state, launch
         state = args.state_dir.resolve() if args.state_dir else ROOT / "state" / firmware_key[:16]
