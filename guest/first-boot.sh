@@ -47,5 +47,5 @@ until [ "$(getprop sys.boot_completed)" = 1 ]; do
     attempt=$((attempt + 1))
     [ "$attempt" -lt 600 ] || exit 1
 done
-[ "$first_boot" = 1 ] && svc wifi enable
+[ "$first_boot" = 1 ] && /system/bin/sh /system/bin/svc wifi enable
 echo 'Android boot complete; virtual Wi-Fi enabled'
