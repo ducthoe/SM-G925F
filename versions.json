@@ -5,11 +5,6 @@
       "url": "https://download.qemu.org/qemu-11.1.1.tar.xz",
       "sha256": "079ffbff8a7111bbc89022107cbabf3bbfd614d5fc9d7cc675991196aca12482"
     },
-    "gcc": {
-      "file": "aarch64-gcc-4.9.tar.gz",
-      "url": "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/android-5.1.1_r1.tar.gz",
-      "sha256": "b2a9e0da8e0da4c8556785fd5cdb017db16d216055d1273885f9e2fd1975aed8"
-    },
     "ndk": {
       "file": "android-ndk-r25c-linux.zip",
       "url": "https://dl.google.com/android/repository/android-ndk-r25c-linux.zip",
@@ -59,7 +54,8 @@
       "commit": "64a2b7534486c509d0e13b91b12d52b42166080e"
     },
     "gcc": {
-      "url": "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9",
+      "url": "https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git",
+      "fallback_urls": ["https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9"],
       "commit": "d4d54ede13f6f76c77137c35a87fa5f0436eded2"
     }
   }

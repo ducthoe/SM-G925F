@@ -88,6 +88,8 @@ The default is up to **4 GB RAM and four virtual CPUs**. CPU emulation and softw
 
 **The build failed:** read the error and the log path printed in the terminal. Fix the reported problem and run the same command again; completed stages are kept. Package lists are in [the dependency installer](scripts/install-dependencies.sh).
 
+**An older checkout reports HTTP 503 for `aarch64-gcc-4.9.tar.gz`:** stop that run, run `git pull`, then launch again. The compiler now comes from a GitHub mirror of the same pinned revision, with visible download progress.
+
 **The screen is black or graphics initialization fails:** check `logs/renderer.log`, then try `--renderer software`. Launch from a terminal in your graphical desktop.
 
 **There is no internet:** turn on Wi-Fi in Android and connect to **QEMU Wi-Fi**. It uses your PC's internet connection; it does not scan nearby physical access points.

@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tarfile
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -33,15 +34,28 @@ def fingerprint(*paths, extra=""):
     return result.hexdigest()
 
 
-def command(args, *, cwd=None, env=None, log=None, input=None):
+def command(args, *, cwd=None, env=None, log=None, input=None, stream=False):
     args = list(map(str, args))
     if log:
         LOGS.mkdir(parents=True, exist_ok=True)
         with (LOGS / log).open("ab") as output:
             output.write(("\n$ " + " ".join(args) + "\n").encode())
             output.flush()
-            result = subprocess.run(args, cwd=cwd, env=env, input=input,
-                                    stdout=output, stderr=subprocess.STDOUT)
+            if stream:
+                with subprocess.Popen(args, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT) as process:
+                    while True:
+                        chunk = process.stdout.read1(8192)
+                        if not chunk:
+                            break
+                        output.write(chunk)
+                        output.flush()
+                        sys.stdout.buffer.write(chunk)
+                        sys.stdout.buffer.flush()
+                    result = subprocess.CompletedProcess(args, process.wait())
+            else:
+                result = subprocess.run(args, cwd=cwd, env=env, input=input,
+                                        stdout=output, stderr=subprocess.STDOUT)
         if result.returncode:
             tail = (LOGS / log).read_text(errors="replace").splitlines()[-16:]
             raise RuntimeError(f"Command failed; see {LOGS / log}\n" + "\n".join(tail))
@@ -104,7 +118,18 @@ def checkout(name, destination):
     log = f"fetch-{name}.log"
     command(["git", "init", destination], log=log)
     command(["git", "-C", destination, "remote", "add", "origin", info["url"]], log=log)
-    command(["git", "-C", destination, "fetch", "--depth=1", "origin", info["commit"]], log=log)
+    urls = [info["url"], *info.get("fallback_urls", [])]
+    for index, url in enumerate(urls):
+        command(["git", "-C", destination, "remote", "set-url", "origin", url], log=log)
+        try:
+            command(["git", "-C", destination, "-c", "http.version=HTTP/1.1",
+                     "fetch", "--progress", "--depth=1", "origin", info["commit"]],
+                    log=log, stream=True)
+            break
+        except RuntimeError:
+            if index + 1 == len(urls):
+                raise
+            print(f"Fetch failed; trying alternate source for {name}...", flush=True)
     command(["git", "-C", destination, "checkout", "--detach", "FETCH_HEAD"], log=log)
     actual = subprocess.check_output(["git", "-C", str(destination), "rev-parse", "HEAD"]).decode().strip()
     if actual != info["commit"]:

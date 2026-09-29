@@ -48,18 +48,9 @@ def ensure_dependencies(no_install):
 def prepare_tools(downloads):
     gcc = WORK / "toolchain/aarch64-linux-android-4.9"
     if not (gcc / "bin/aarch64-linux-android-gcc").exists():
-        try:
-            archive = download("gcc", downloads)
-        except RuntimeError:
-            archive = None
-        except subprocess.CalledProcessError:
-            archive = None
-        if archive:
-            unpack_tar(archive, gcc)
-        else:
-            # Gitiles archive exports are occasionally unavailable; fetch the
-            # same pinned upstream commit through Git instead.
-            checkout("gcc", gcc)
+        # Gitiles archive exports fail with HTTP 503. The mirror contains
+        # the exact same pinned compiler commit and preserves symlinks.
+        checkout("gcc", gcc)
     ndk = WORK / "toolchain/android-ndk-r25c"
     if not (ndk / "toolchains/llvm/prebuilt/linux-x86_64/bin/clang").exists():
         unpack_zip(download("ndk", downloads), WORK / "toolchain")
