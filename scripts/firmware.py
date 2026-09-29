@@ -121,6 +121,34 @@ def extract_odin(rar, member, wanted, destination):
             process.wait()
 
 
+def find_cached_firmware(identifier=None):
+    candidates = []
+    expected = {"/lib64/libsurfaceflinger.so": SUPPORTED_SURFACEFLINGER,
+                "/framework/arm64/services.odex": SUPPORTED_SERVICES}
+    for receipt in sorted((WORK / "firmware").glob("*/firmware.json")):
+        directory = receipt.parent
+        metadata = json.loads(receipt.read_text())
+        key = metadata.get("rar_sha256", "")
+        if (not isinstance(key, str) or len(key) != 64 or
+                any(character not in "0123456789abcdef" for character in key) or
+                directory.name != key[:16] or metadata.get("binary_sha256") != expected):
+            continue
+        required = (directory / "stock.raw.img", directory / "hidden.raw.img", directory / "boot/ramdisk")
+        if all(path.is_file() for path in required):
+            candidates.append((directory, key))
+    if identifier:
+        candidates = [(directory, key) for directory, key in candidates
+                      if key.startswith(identifier)]
+    if not candidates:
+        raise RuntimeError("No matching extracted firmware cache found. Run ./run.sh /path/to/firmware.rar once.")
+    if len(candidates) != 1:
+        choices = ", ".join(directory.name for directory, key in candidates)
+        raise RuntimeError(f"Several firmware caches exist ({choices}). Select one with --firmware-id ID.")
+    directory, key = candidates[0]
+    print(f"Using extracted firmware cache: {directory.name}", flush=True)
+    return directory, key
+
+
 def prepare_firmware(rar):
     key = digest(rar)
     directory = WORK / "firmware" / key[:16]

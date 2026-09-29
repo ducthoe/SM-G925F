@@ -61,17 +61,23 @@ The phone opens in a window that fits the whole screen. A fresh device starts in
 
 ## Run it again
 
-Use the **same command**. Completed builds are reused, and your apps and settings are saved in `state/`.
+After the first build, launch without providing the RAR:
+
+```sh
+./run.sh
+```
+
+It reuses the extracted firmware in `working/firmware/` and completed builds. Your apps and settings are saved in `state/`. Keep both folders when updating the project. If several firmware caches exist, select one with `./run.sh --firmware-id ID` using the ID shown in the error message.
 
 Keep `state/` when updating the project. To try a separate, fresh phone without deleting your existing data:
 
 ```sh
-./run.sh "/path/to/firmware.rar" --state-dir "$PWD/state/fresh-phone"
+./run.sh --state-dir "$PWD/state/fresh-phone"
 ```
 
 ## Useful options
 
-Add these after the firmware path:
+Add these to `./run.sh` (or after the firmware path on the first build):
 
 | Option | Use it to… |
 | --- | --- |

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from common import (ROOT, WORK, LOGS, VERSIONS, cached, checkout, command, download,
                     find_tool, fingerprint, unpack_tar, unpack_zip)
-from firmware import prepare_firmware, dump, expand_sparse
+from firmware import prepare_firmware, find_cached_firmware, dump, expand_sparse
 from supersu import bundle as supersu_bundle
 
 
@@ -261,7 +261,9 @@ def build_audio(gcc, ndk, jobs, firmware):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("firmware", type=Path, help="SM-G925F G925FXXU1AOCV repair firmware .rar")
+    parser.add_argument("firmware", nargs="?", type=Path,
+                        help="SM-G925F repair firmware .rar; omit to reuse the extracted firmware cache")
+    parser.add_argument("--firmware-id", help="select an extracted firmware cache by its ID or SHA-256 prefix")
     parser.add_argument("--build-only", action="store_true", help="prepare everything without opening a VM")
     parser.add_argument("--no-install", action="store_true", help="report missing packages without sudo")
     parser.add_argument("--renderer", choices=("auto", "hardware", "software"), default="auto")
@@ -275,7 +277,9 @@ def main():
         parser.error("This version supports x86_64 Linux hosts")
     if sys.version_info < (3, 10):
         parser.error("Python 3.10 or newer is required")
-    if not args.firmware.is_file() or args.firmware.suffix.lower() != ".rar":
+    if args.firmware is not None and args.firmware_id:
+        parser.error("Provide either a firmware .rar or --firmware-id, not both")
+    if args.firmware is not None and (not args.firmware.is_file() or args.firmware.suffix.lower() != ".rar"):
         parser.error("Provide an existing firmware .rar file")
     if args.jobs < 1 or not 1 <= args.cpus <= 8 or (args.ram is not None and not 2048 <= args.ram <= 4096):
         parser.error("Use jobs >= 1, 1–8 CPUs, and 2048–4096 MiB RAM")
@@ -290,8 +294,11 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RuntimeError("This checkout already has a build or emulator running")
+        if args.firmware is None:
+            firmware, firmware_key = find_cached_firmware(args.firmware_id)
         ensure_dependencies(args.no_install)
-        firmware, firmware_key = prepare_firmware(args.firmware.resolve())
+        if args.firmware is not None:
+            firmware, firmware_key = prepare_firmware(args.firmware.resolve())
         gcc, ndk = prepare_tools(args.downloads.resolve())
         qemu = build_qemu(args.downloads.resolve(), args.jobs)
         kernel = build_kernel(gcc, args.jobs)
