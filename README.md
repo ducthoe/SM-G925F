@@ -64,6 +64,10 @@ The phone opens in a window that fits the whole screen. A fresh device starts in
 Keyboard shortcuts work while the phone screen has focus. On some laptops,
 hold **Fn** to use F1–F6 instead of the laptop's media controls.
 
+Screen locking follows Android's settings. PINs use the firmware's salted
+software verification because Samsung's hardware credential store is unavailable
+in this virtual phone.
+
 ## Run it again
 
 After the first build, launch without providing the RAR:

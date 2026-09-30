@@ -128,7 +128,10 @@ def build(source, output):
         text = properties.read_text()
         updates = {"ro.sf.lcd_density": "320", "ro.opengles.version": "131072",
                    "ro.hardware.gralloc": "goldfish", "ro.product.locale.language": "en",
-                   "ro.product.locale.region": "GB", "ro.radio.noril": "yes"}
+                   "ro.product.locale.region": "GB", "ro.radio.noril": "yes",
+                   # MDPP selects Samsung's unavailable hardware PIN store.
+                   # Keep Android's salted software credential verification.
+                   "ro.security.mdpp.ux": "Disabled"}
         for key, value in updates.items():
             pattern = rf"(?m)^{re.escape(key)}=.*$"
             if re.search(pattern, text):

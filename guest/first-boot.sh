@@ -15,6 +15,16 @@ while :; do
     attempt=$((attempt + 1))
     [ "$attempt" -lt 600 ] || exit 1
 done
+# The virtual phone has no Samsung hardware credential store. "None"
+# selects the stock salted password hash path instead of MDPP keystore PINs.
+setprop security.mdpp None
+# Restore the lockscreen once on phones created by older versions. Samsung
+# reads this value from LockSettingsService, independently of Settings.
+if [ ! -f /data/.g925-lockscreen-restored ]; then
+    /system/bin/sh /system/bin/settings put secure lockscreen.disabled 0
+    service call lock_settings 2 s16 lockscreen.disabled i32 0 i32 0 i32 0
+    /sbin/busybox touch /data/.g925-lockscreen-restored
+fi
 # Reload the media process once the FIFO and host transport are available.
 # This also recovers a HAL probe that happened before the init helper ran.
 if [ -p /dev/eac ] && [ -n "$(getprop ro.boot.g925audioport)" ]; then
@@ -29,8 +39,6 @@ if [ ! -f /data/.g925-initialized ]; then
     settings put secure user_setup_complete 1
     [ "$(get_setting global device_provisioned)" = 1 ] || exit 1
     [ "$(get_setting secure user_setup_complete)" = 1 ] || exit 1
-    settings put system screen_off_timeout 2147483647
-    settings put secure lockscreen.disabled 1
     echo 1 >/data/misc/wifi/g925-virtual-network
     /sbin/busybox chmod 0660 /data/misc/wifi/g925-virtual-network
     /sbin/busybox chown 1010:1010 /data/misc/wifi/g925-virtual-network

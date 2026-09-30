@@ -85,7 +85,10 @@ def build(source, output):
         for name, disk in ALIASES.items():
             lines.append(f"    symlink /dev/block/{disk} /dev/block/platform/15570000.ufs/by-name/{name}")
         lines.extend(["", "on early-init", "    setprop ro.radio.noril yes", "",
-                      "on post-fs-data", "    insmod /sbin/virtio_net.ko", "    insmod /sbin/dhd.ko",
+                      "# Stock services may advertise unsupported MDPP hardware at startup.",
+                      "on property:security.mdpp=Ready", "    setprop security.mdpp None", "",
+                      "on post-fs-data", "    setprop security.mdpp None",
+                      "    insmod /sbin/virtio_net.ko", "    insmod /sbin/dhd.ko",
                       "    insmod /sbin/g925_headset.ko", "    start g925audio", "    start g925supersu",
                       "    start g925adb",
                       "    chmod 0666 /sys/module/dhd/parameters/firmware_path",
