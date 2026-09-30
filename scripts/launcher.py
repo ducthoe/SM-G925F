@@ -115,7 +115,7 @@ def attach_disk(args, name, image, readonly=False):
     file_node = {"driver": "file", "filename": str(image), "node-name": name + "-file", "read-only": readonly}
     raw_node = {"driver": "raw", "file": name + "-file", "node-name": name, "read-only": readonly}
     args.extend(["-blockdev", json.dumps(file_node), "-blockdev", json.dumps(raw_node),
-                 "-device", f"virtio-blk-device,drive={name}"])
+                 "-device", f"virtio-blk-device,drive={name},iothread=storage"])
 
 
 def launch(options, qemu, kernel, system, ramdisk, state):
@@ -134,7 +134,7 @@ def launch(options, qemu, kernel, system, ramdisk, state):
                     "-accel", "tcg,thread=multi,tb-size=1024", "-cpu", "cortex-a57",
                     "-smp", str(options.cpus), "-m", str(ram), "-kernel", str(kernel / "arch/arm64/boot/Image"),
                     "-initrd", str(ramdisk), "-append",
-                    "console=ttyAMA0,115200 loglevel=3 security=selinux "
+                    "console=ttyAMA0,115200 loglevel=3 security=selinux elevator=noop "
                     "androidboot.hardware=samsungexynos7420 androidboot.console=ttyAMA0 qemu=1 qemu.gles=1 "
                     "video=vfb:720x1280M-32@60 vfb.videomemorysize=33554432 vfb.qemu_scanout=1 "
                     "test_power.battery_capacity=85 test_power.battery_status=charging test_power.battery_voltage=3800000 "
@@ -154,7 +154,10 @@ def launch(options, qemu, kernel, system, ramdisk, state):
                     "-netdev", f"user,id=adb,net=10.0.3.0/24,dhcpstart=10.0.3.15,restrict=on,hostfwd=tcp:127.0.0.1:{options.adb_port}-10.0.3.15:5555",
                     "-device", "virtio-net-device,netdev=adb,mac=52:54:00:25:00:02,x-disable-legacy-check=on",
                     "-device", "virtio-tablet-device,x-disable-legacy-check=on",
-                    "-device", "virtio-keyboard-device,x-disable-legacy-check=on"]
+                    "-device", "virtio-keyboard-device,x-disable-legacy-check=on",
+                    # Keep disk queues/completions off the GTK/device thread.
+                    # Disable busy polling to avoid using CPU while idle.
+                    "-object", "iothread,id=storage,poll-max-ns=0"]
             # MMIO discovery is reversed by this virt machine version. Keep
             # block devices last and reverse them so system is always vda.
             attach_disk(args, "hidden", system.parent / "hidden.raw.img", True)
@@ -174,6 +177,7 @@ def launch(options, qemu, kernel, system, ramdisk, state):
                        "qmp": str(runtime / "qmp.sock"), "command": args})
             print(f"Starting Android: {ram} MiB RAM, {options.cpus} vCPUs, 720×1280 screen.", flush=True)
             print(f"ADB: adb connect 127.0.0.1:{options.adb_port}", flush=True)
+            print("Keys: F1 Recents, F2 Home, F3 Back, F4 Power, F5 Volume Down, F6 Volume Up.", flush=True)
             print(f"Logs: {LOGS}\nGuest disks: {state}\nClose the QEMU window to stop.", flush=True)
             while vm.poll() is None:
                 if gpu.poll() is not None:

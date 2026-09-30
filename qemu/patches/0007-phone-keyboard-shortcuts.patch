@@ -1,0 +1,36 @@
+--- a/ui/gtk.c
++++ b/ui/gtk.c
+@@ -1342,6 +1342,22 @@
+     return TRUE;
+ }
+ 
++static unsigned int gd_phone_key(unsigned int lnx)
++{
++    if (g_strcmp0(g_getenv("G925_PHONE_NAV"), "1") != 0) {
++        return lnx;
++    }
++    switch (lnx) {
++    case KEY_F1: return 254; /* Samsung APP_SWITCH */
++    case KEY_F2: return KEY_HOMEPAGE;
++    case KEY_F3: return KEY_BACK;
++    case KEY_F4: return KEY_POWER;
++    case KEY_F5: return KEY_VOLUMEDOWN;
++    case KEY_F6: return KEY_VOLUMEUP;
++    default: return lnx;
++    }
++}
++
+ static gboolean gd_key_event(GtkWidget *widget, GdkEventKey *key, void *opaque)
+ {
+     VirtualConsole *vc = opaque;
+@@ -1375,7 +1391,9 @@
+     }
+ 
+     keycode = gd_get_keycode(key);
+-    lnx = gd_map_keycode(keycode);
++    /* Remap both edges through QKbdState so holds and focus-loss releases
++     * behave like physical phone buttons. */
++    lnx = gd_phone_key(gd_map_keycode(keycode));
+ 
+     trace_gd_key_event(vc->label, keycode, lnx,
+                        (key->type == GDK_KEY_PRESS) ? "down" : "up");

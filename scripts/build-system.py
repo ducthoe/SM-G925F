@@ -166,6 +166,9 @@ def build(source, output):
                      "/priv-app/ImsLogger+", "/app/NfcNci", "/priv-app/SetupWizard",
                      "/app/SecSetupWizard2015", "/app/KnoxSetupWizardClient"):
             remove_tree(temporary, path)
+        # Samsung's Device Test (com.sec.factory) probes physical hardware
+        # that this virtual phone does not have.
+        remove_tree(temporary, "/priv-app/DeviceTest")
     temporary.replace(output)
     print(f"Prepared {output}", flush=True)
 

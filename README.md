@@ -52,12 +52,17 @@ The phone opens in a window that fits the whole screen. A fresh device starts in
 | --- | --- |
 | Tap | Left click |
 | Swipe | Hold the left mouse button and drag |
-| Recent apps / Home / Back | Buttons below the phone screen |
+| Recent apps / Home / Back | Buttons below the phone screen, or **F1 / F2 / F3** |
+| Power / wake / sleep | **F4**; hold it for the power menu |
+| Volume down / up | **F5 / F6**; hold to keep adjusting |
 | Resize | Drag the window edges; the screen scales to fit |
 | Internet | Enable **QEMU Wi-Fi** in Android's Wi-Fi settings |
 | Sound | Use your Linux speakers or headphones and Android's volume controls |
 | Root access | Open **SuperSU** in the app drawer |
 | Stop | Close the QEMU window |
+
+Keyboard shortcuts work while the phone screen has focus. On some laptops,
+hold **Fn** to use F1–F6 instead of the laptop's media controls.
 
 ## Run it again
 
@@ -95,6 +100,13 @@ rm -f working/qemu-g925-src/.g925-build \
 These commands preserve the extracted firmware in `working/firmware/`, downloads, the original RAR, and saved phone data in `state/`. The rebuild can take as long as the initial compilation. Use `--jobs 2` with `--build-only` if build memory is limited.
 
 The updated build reached `sys.boot_completed=1` with SurfaceFlinger running and Wi-Fi configured on temporary disk overlays. Overall speed depends on the host and workload.
+
+Virtual disks now use a dedicated QEMU I/O thread and the guest's `noop`
+scheduler, so disk queue processing runs separately from the window and other
+devices. Disk flushing is retained, and the I/O thread sleeps when idle.
+The adapted system image also omits Samsung's **Device Test** app.
+After updating, restart with `./run.sh` to rebuild the changed components
+automatically and enable the keyboard shortcuts. Your saved phone data is kept.
 
 ![Settings screen after the performance update](docs/performance-screen.png)
 
