@@ -75,6 +75,29 @@ Keep `state/` when updating the project. To try a separate, fresh phone without 
 ./run.sh --state-dir "$PWD/state/fresh-phone"
 ```
 
+## Update and rebuild
+
+**A full rebuild is recommended after installing this performance update.** It changes the guest GLES driver, QEMU graphics transport, display conversion, and idle Wi-Fi/audio handling. GLES transfers now use batches of up to 64 KiB, and the display avoids an extra full-frame copy and per-pixel division.
+
+Close the emulator, then run these commands from the project folder:
+
+```sh
+git pull
+rm -rf working/qemu-g925-src/build working/kernel-old-build \
+    working/emugl-compatible-build working/emugl-compatible \
+    working/wifi working/audio working/storage
+rm -f working/qemu-g925-src/.g925-build \
+    working/firmware/*/.system-build working/firmware/*/.ramdisk-build
+./run.sh --build-only
+./run.sh
+```
+
+These commands preserve the extracted firmware in `working/firmware/`, downloads, the original RAR, and saved phone data in `state/`. The rebuild can take as long as the initial compilation. Use `--jobs 2` with `--build-only` if build memory is limited.
+
+The updated build reached `sys.boot_completed=1` with SurfaceFlinger running and Wi-Fi configured on temporary disk overlays. Overall speed depends on the host and workload.
+
+![Settings screen after the performance update](docs/performance-screen.png)
+
 ## Useful options
 
 Add these to `./run.sh` (or after the firmware path on the first build):

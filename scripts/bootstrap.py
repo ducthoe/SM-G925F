@@ -128,13 +128,34 @@ def build_kernel(gcc, jobs):
         print("Using cached kernel and Wi-Fi modules.", flush=True)
         return build
     patch_stamp = source / ".g925-patches"
-    if not cached(patch_stamp, key, [source / ".git"]):
-        if source.exists():
-            shutil.rmtree(source)
+    upstream = VERSIONS["sources"]["kernel"]["commit"]
+    source_key = fingerprint(ROOT / "kernel/g925-virt.patch", extra=upstream)
+    if not cached(patch_stamp, source_key, [source / ".git"]):
+        changed_upstream = not cached(source / ".g925-upstream", upstream, [source / ".git"])
         checkout("kernel", source)
+        revision = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"]).decode().strip()
+        if revision != upstream:
+            raise RuntimeError("Kernel source does not match its pinned revision")
+        # Restore just the patch's files, including files from the previous
+        # version. Preserve the source cache and compiled objects so a driver
+        # edit needs an incremental build instead of another clone/build.
+        previous = source / ".g925-applied.patch"
+        patches = [ROOT / "kernel/g925-virt.patch"]
+        if previous.exists():
+            patches.append(previous)
+        paths = {line[6:].split("\t")[0] for patch in patches
+                 for line in patch.read_text().splitlines() if line.startswith("+++ b/")}
+        for path in sorted(paths):
+            pristine = subprocess.run(["git", "-C", str(source), "show", f"HEAD:{path}"], capture_output=True)
+            target = source / path
+            if pristine.returncode == 0:
+                target.write_bytes(pristine.stdout)
+            else:
+                target.unlink(missing_ok=True)
         command(["git", "-C", source, "apply", ROOT / "kernel/g925-virt.patch"], log="kernel-build.log")
-        patch_stamp.write_text(key + "\n")
-        if build.exists():
+        shutil.copyfile(ROOT / "kernel/g925-virt.patch", previous)
+        patch_stamp.write_text(source_key + "\n")
+        if changed_upstream and build.exists():
             shutil.rmtree(build)
     build.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(ROOT / "kernel/g925-virt.config", build / ".config")

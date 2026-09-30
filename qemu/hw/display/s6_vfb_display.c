@@ -38,6 +38,10 @@ struct S6VfbDisplayState {
     uint32_t frame_line, frame_width, frame_height;
     uint8_t *pending;
     uint8_t *shadow;
+    uint32_t *row_buffer;
+    uint32_t *source_x;
+    uint32_t *source_y;
+    bool shadow_flipped;
     bool full_update;
     bool frame_ready;
     bool display_blank;
@@ -108,7 +112,7 @@ static void s6_vfb_commit(S6VfbDisplayState *s)
     uint32_t visible = 0;
     uint32_t *pixels = (uint32_t *)s->pending;
 
-    if (s->follow_rendered_pages) {
+    if (s->follow_rendered_pages || s->host_frames) {
         s->frame_count++;
         return;
     }
@@ -119,15 +123,6 @@ static void s6_vfb_commit(S6VfbDisplayState *s)
         return;
     }
     s->frame_count++;
-    for (size_t i = 0; i < (size_t)s->width * s->height; i++) {
-        visible |= pixels[i] & 0x00ffffff;
-    }
-    /* Mode changes and Samsung's software path can submit an empty buffer
-     * between UI frames. Preserve the last frame; FB_BLANK handles power-off. */
-    if (!visible && s->have_visible_frame && !s->display_blank) {
-        return;
-    }
-    s->have_visible_frame |= visible != 0;
     for (uint32_t y = 0; y < s->height; y++) {
         uint64_t va = s->frame_base + (uint64_t)y * s->frame_line;
         uint32_t left = s->width * 4;
@@ -147,7 +142,19 @@ static void s6_vfb_commit(S6VfbDisplayState *s)
             left -= len;
         }
     }
-    memcpy(s->shadow, s->pending, (size_t)s->width * s->height * 4);
+    /* Inspect the completed snapshot, never the old/uninitialized buffer. */
+    for (size_t i = 0; i < (size_t)s->width * s->height && !visible; i++) {
+        visible |= pixels[i] & 0x00ffffff;
+    }
+    /* Mode changes can submit an empty buffer between UI frames. */
+    if (!visible && s->have_visible_frame && !s->display_blank) {
+        return;
+    }
+    s->have_visible_frame |= visible != 0;
+    uint8_t *previous = s->shadow;
+    s->shadow = s->pending;
+    s->pending = previous;
+    s->shadow_flipped = false;
     s->frame_ready = true;
     s->full_update = true;
 }
@@ -292,6 +299,7 @@ static void s6_vfb_poll_rendered(S6VfbDisplayState *s)
     }
     if (selected >= 0) {
         memcpy(s->shadow, s->history + selected * bytes, bytes);
+        s->shadow_flipped = false;
         s->presented_change = newest;
         s->frame_ready = true;
         s->have_visible_frame = true;
@@ -306,25 +314,26 @@ static void s6_vfb_poll_host(S6VfbDisplayState *s)
     int32_t direction;
     size_t bytes = (size_t)s->width * s->height * 4;
 
-    memcpy(&sequence, file + 8, sizeof(sequence));
+    sequence = qatomic_read((const uint64_t *)(file + 8));
     sequence = le64_to_cpu(sequence);
     if (!sequence || (sequence & 1) || sequence == s->host_sequence) {
         return;
     }
+    smp_rmb();
     memcpy(&direction, file + 24, sizeof(direction));
     direction = le32_to_cpu(direction);
     memcpy(s->pending, file + 4096, bytes);
     smp_rmb();
-    memcpy(&after, file + 8, sizeof(after));
+    after = qatomic_read((const uint64_t *)(file + 8));
     if (le64_to_cpu(after) != sequence) {
         return;
     }
-    for (uint32_t y = 0; y < s->height; y++) {
-        uint32_t source = direction > 0 ? s->height - 1 - y : y;
-
-        memcpy(s->shadow + (size_t)y * s->width * 4,
-               s->pending + (size_t)source * s->width * 4, s->width * 4);
-    }
+    /* Keep the stable snapshot and flip during conversion. Swapping avoids
+     * copying another full 720x1280 frame for every renderer callback. */
+    uint8_t *previous = s->shadow;
+    s->shadow = s->pending;
+    s->pending = previous;
+    s->shadow_flipped = direction > 0;
     s->host_sequence = sequence;
     s->frame_ready = true;
     s->full_update = true;
@@ -336,14 +345,17 @@ static bool s6_vfb_update(void *opaque)
     DisplaySurface *surf = qemu_console_surface(s->con);
     uint8_t *dst;
     int stride;
+    uint32_t first_changed = s->output_height, last_changed = 0;
 
-    if (s->host_frames) {
-        s6_vfb_poll_host(s);
-    } else if (s->follow_rendered_pages) {
-        s6_vfb_poll_rendered(s);
+    if (!s->display_blank) {
+        if (s->host_frames) {
+            s6_vfb_poll_host(s);
+        } else if (s->follow_rendered_pages) {
+            s6_vfb_poll_rendered(s);
+        }
     }
 
-    if (!surf || !s->frame_ready) {
+    if (!surf || (!s->frame_ready && !s->display_blank)) {
         return true;
     }
     if (surf != s->last_surf) {
@@ -356,20 +368,36 @@ static bool s6_vfb_update(void *opaque)
     dst = surface_data(surf);
     stride = surface_stride(surf);
     for (uint32_t y = 0; y < s->output_height; y++) {
-        uint32_t src_y = (uint64_t)y * s->height / s->output_height;
-        uint32_t *row = (uint32_t *)(dst + y * stride);
+        uint32_t src_y = s->source_y[y];
+        size_t row_bytes = s->output_width * 4;
+        uint8_t *row = dst + (size_t)y * stride;
 
-        for (uint32_t x = 0; x < s->output_width; x++) {
-            uint32_t src_x = (uint64_t)x * s->width / s->output_width;
-            const uint8_t *pixel = s->shadow +
-                ((size_t)src_y * s->width + src_x) * 4;
+        if (s->display_blank) {
+            memset(s->row_buffer, 0, row_bytes);
+        } else {
+            if (s->shadow_flipped) {
+                src_y = s->height - 1 - src_y;
+            }
+            const uint8_t *source = s->shadow + (size_t)src_y * s->width * 4;
 
-            row[x] = s->display_blank ? 0 :
-                     (pixel[0] << 16) | (pixel[1] << 8) | pixel[2];
+            for (uint32_t x = 0; x < s->output_width; x++) {
+                const uint8_t *pixel = source + s->source_x[x];
+
+                s->row_buffer[x] = (pixel[0] << 16) |
+                                   (pixel[1] << 8) | pixel[2];
+            }
+        }
+        if (memcmp(row, s->row_buffer, row_bytes)) {
+            memcpy(row, s->row_buffer, row_bytes);
+            first_changed = MIN(first_changed, y);
+            last_changed = y;
         }
     }
     s->full_update = false;
-    qemu_console_update(s->con, 0, 0, s->output_width, s->output_height);
+    if (first_changed < s->output_height) {
+        qemu_console_update(s->con, 0, first_changed, s->output_width,
+                            last_changed - first_changed + 1);
+    }
     return true;
 }
 
@@ -389,7 +417,8 @@ static void s6_vfb_realize(DeviceState *dev, Error **errp)
 {
     S6VfbDisplayState *s = S6_VFB_DISPLAY(dev);
 
-    if (!s->output_width || !s->output_height ||
+    if (!s->width || !s->height || s->width > 16384 || s->height > 16384 ||
+        !s->output_width || !s->output_height ||
         s->output_width > s->width || s->output_height > s->height) {
         error_setg(errp, "S6 framebuffer output must fit inside the guest screen");
         return;
@@ -401,7 +430,6 @@ static void s6_vfb_realize(DeviceState *dev, Error **errp)
     sysbus_init_mmio(SYS_BUS_DEVICE(s), &s->mmio);
     sysbus_mmio_map(SYS_BUS_DEVICE(s), 0, 0x090f0000);
     s->shadow = g_malloc0((size_t)s->width * s->height * 4);
-    s->history = g_malloc0((size_t)s->width * s->height * 4 * 4);
     if (s->host_frame_path) {
         GError *error = NULL;
         size_t required = 4096 + (size_t)s->width * s->height * 4;
@@ -413,6 +441,26 @@ static void s6_vfb_realize(DeviceState *dev, Error **errp)
             g_clear_error(&error);
             return;
         }
+        const uint8_t *header = (const uint8_t *)g_mapped_file_get_contents(s->host_frames);
+        if (memcmp(header, "G925GPU1", 8) ||
+            ldl_le_p(header + 16) != s->width ||
+            ldl_le_p(header + 20) != s->height ||
+            ldl_le_p(header + 28) != 0x1908 ||
+            ldl_le_p(header + 32) != 0x1401) {
+            error_setg(errp, "GPU frame file must contain matching RGBA8 frames");
+            return;
+        }
+    } else if (s->follow_rendered_pages) {
+        s->history = g_malloc0((size_t)s->width * s->height * 4 * 4);
+    }
+    s->row_buffer = g_new(uint32_t, s->output_width);
+    s->source_x = g_new(uint32_t, s->output_width);
+    s->source_y = g_new(uint32_t, s->output_height);
+    for (uint32_t x = 0; x < s->output_width; x++) {
+        s->source_x[x] = ((uint64_t)x * s->width / s->output_width) * 4;
+    }
+    for (uint32_t y = 0; y < s->output_height; y++) {
+        s->source_y[y] = (uint64_t)y * s->height / s->output_height;
     }
     s->full_update = true;
     s->con = qemu_graphic_console_create(dev, 0, &s6_vfb_ops, s);

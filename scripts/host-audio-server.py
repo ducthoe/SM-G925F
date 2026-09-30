@@ -69,7 +69,11 @@ def main():
                     raise RuntimeError(f"Audio backend exited with {player.returncode}")
                 now = time.monotonic()
                 writable = [player.stdin] if player and queue and now >= ready_at else []
-                readable, writable, _ = select.select([server], writable, [], 0.01)
+                # Wake for a packet, backend capacity, or the prebuffer
+                # deadline. Idle playback only needs the one-second lifetime
+                # check instead of a 100 Hz polling loop.
+                timeout = min(1.0, ready_at - now) if player and queue and now < ready_at else 1.0
+                readable, writable, _ = select.select([server], writable, [], timeout)
                 if readable:
                     while True:
                         try:
@@ -88,7 +92,7 @@ def main():
                             last_data = 0
                         if previous is not None:
                             difference = (sequence - previous) & 0xffffffff
-                            if difference > 0x80000000:
+                            if difference == 0 or difference > 0x80000000:
                                 continue
                         previous = sequence
                         pcm = data[8:]

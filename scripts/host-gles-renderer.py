@@ -7,6 +7,7 @@ import mmap
 import os
 import signal
 import struct
+import threading
 import time
 from pathlib import Path
 
@@ -34,6 +35,7 @@ def main() -> None:
                      0x1908, 0x1401)
     pixel_address = ctypes.addressof(ctypes.c_char.from_buffer(frames, 4096))
     sequence = 0
+    post_lock = threading.Lock()
     post_type = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_int,
                                 ctypes.c_int, ctypes.c_int, ctypes.c_int,
                                 ctypes.c_int, ctypes.c_void_p)
@@ -45,12 +47,15 @@ def main() -> None:
             return
         if format_ != 0x1908 or type_ != 0x1401:
             return
-        struct.pack_into("<Q", frames, 8, sequence + 1)
-        struct.pack_into("<5I", frames, 16, width, height,
-                         direction & 0xffffffff, format_, type_)
-        ctypes.memmove(pixel_address, pixels, width * height * 4)
-        sequence += 2
-        struct.pack_into("<Q", frames, 8, sequence)
+        # memmove releases the GIL. Serialize callbacks so two renderer
+        # threads cannot publish overlapping writes as a completed frame.
+        with post_lock:
+            struct.pack_into("<Q", frames, 8, sequence + 1)
+            struct.pack_into("<5I", frames, 16, width, height,
+                             direction & 0xffffffff, format_, type_)
+            ctypes.memmove(pixel_address, pixels, width * height * 4)
+            sequence += 2
+            struct.pack_into("<Q", frames, 8, sequence)
 
     renderer = ctypes.CDLL(str(directory / "lib64OpenglRender.so"),
                            mode=ctypes.RTLD_GLOBAL)

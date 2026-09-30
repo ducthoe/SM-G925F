@@ -183,7 +183,7 @@ index 8a44a4cd..8fd95351 100644
 -obj-$(CONFIG_GOLDFISH)		+= goldfish/
 +obj-y				+= goldfish/
 diff --git a/drivers/platform/goldfish/goldfish_pipe.c b/drivers/platform/goldfish/goldfish_pipe.c
-index 4f5aa831..a9d0a0d6 100644
+index 4f5aa831..c35bc63f 100644
 --- a/drivers/platform/goldfish/goldfish_pipe.c
 +++ b/drivers/platform/goldfish/goldfish_pipe.c
 @@ -46,6 +46,8 @@
@@ -203,15 +203,16 @@ index 4f5aa831..a9d0a0d6 100644
  #define PIPE_REG_WAKES			0x14  /* read: wake flags */
  #define PIPE_REG_PARAMS_ADDR_LOW	0x18  /* read/write: batch data address */
  #define PIPE_REG_PARAMS_ADDR_HIGH	0x1c  /* read/write: batch data address */
-@@ -135,6 +138,7 @@ static struct goldfish_pipe_dev   pipe_dev[1];
+@@ -135,6 +138,8 @@ static struct goldfish_pipe_dev   pipe_dev[1];
  struct goldfish_pipe {
  	struct goldfish_pipe_dev *dev;
  	struct mutex lock;
 +	void *bounce;
++	size_t bounce_size;
  	unsigned long flags;
  	wait_queue_head_t wake_queue;
  };
-@@ -246,6 +250,7 @@ static int access_with_param(struct goldfish_pipe_dev *dev, const int cmd,
+@@ -246,6 +251,7 @@ static int access_with_param(struct goldfish_pipe_dev *dev, const int cmd,
  	aps->channel = (unsigned long)pipe;
  	aps->size = avail;
  	aps->address = address;
@@ -219,31 +220,60 @@ index 4f5aa831..a9d0a0d6 100644
  	aps->cmd = cmd;
  	writel(cmd, dev->base + PIPE_REG_ACCESS_PARAMS);
  	/*
-@@ -298,6 +303,7 @@ static ssize_t goldfish_pipe_read_write(struct file *filp, char __user *buffer,
- 								 : address_end;
- 		unsigned long  avail    = next - address;
+@@ -281,7 +287,7 @@ static ssize_t goldfish_pipe_read_write(struct file *filp, char __user *buffer,
+ 		return 0;
+ 
+ 	/* Check the buffer range for access */
+-	if (!access_ok(is_write ? VERIFY_WRITE : VERIFY_READ,
++	if (!access_ok(is_write ? VERIFY_READ : VERIFY_WRITE,
+ 			buffer, bufflen))
+ 		return -EFAULT;
+ 
+@@ -293,45 +299,42 @@ static ssize_t goldfish_pipe_read_write(struct file *filp, char __user *buffer,
+ 	address_end = address + bufflen;
+ 
+ 	while (address < address_end) {
+-		unsigned long  page_end = (address & PAGE_MASK) + PAGE_SIZE;
+-		unsigned long  next     = page_end < address_end ? page_end
+-								 : address_end;
+-		unsigned long  avail    = next - address;
++		unsigned long avail = min_t(unsigned long,
++				address_end - address, pipe->bounce_size);
  		int status, wakeBit;
 +		unsigned long transfer_address = __pa(pipe->bounce);
  
- 		/* Ensure that the corresponding page is properly mapped */
- 		/* FIXME: this isn't safe or sufficient - use get_user_pages */
-@@ -318,13 +324,21 @@ static ssize_t goldfish_pipe_read_write(struct file *filp, char __user *buffer,
- 			}
- 		}
- 
+-		/* Ensure that the corresponding page is properly mapped */
+-		/* FIXME: this isn't safe or sufficient - use get_user_pages */
+-		if (is_write) {
+-			char c;
+-			/* Ensure that the page is mapped and readable */
+-			if (__get_user(c, (char __user *)address)) {
+-				if (!ret)
+-					ret = -EFAULT;
+-				break;
+-			}
+-		} else {
+-			/* Ensure that the page is mapped and writable */
+-			if (__put_user(0, (char __user *)address)) {
+-				if (!ret)
+-					ret = -EFAULT;
+-				break;
+-			}
 +		/* The virt transport reads physical RAM, including on ARM64. */
 +		if (is_write && copy_from_user(pipe->bounce,
 +				(const void __user *)address, avail)) {
 +			ret = ret ? ret : -EFAULT;
 +			break;
-+		}
- 		/* Now, try to transfer the bytes in the current page */
+ 		}
+-
+-		/* Now, try to transfer the bytes in the current page */
++		/* Batch physically contiguous bytes in one emulator command. */
  		spin_lock_irqsave(&dev->lock, irq_flags);
-+		writel((u64)transfer_address >> 32,
-+				dev->base + PIPE_REG_ADDRESS_HIGH);
  		if (access_with_param(dev, CMD_WRITE_BUFFER + cmd_offset,
 -				address, avail, pipe, &status)) {
 +				transfer_address, avail, pipe, &status)) {
++			writel((u64)transfer_address >> 32,
++					dev->base + PIPE_REG_ADDRESS_HIGH);
  			writel((u32)pipe, dev->base + PIPE_REG_CHANNEL);
  			writel(avail, dev->base + PIPE_REG_SIZE);
 -			writel(address, dev->base + PIPE_REG_ADDRESS);
@@ -251,9 +281,13 @@ index 4f5aa831..a9d0a0d6 100644
  			writel(CMD_WRITE_BUFFER + cmd_offset,
  					dev->base + PIPE_REG_COMMAND);
  			status = readl(dev->base + PIPE_REG_STATUS);
-@@ -332,6 +346,11 @@ static ssize_t goldfish_pipe_read_write(struct file *filp, char __user *buffer,
+ 		}
  		spin_unlock_irqrestore(&dev->lock, irq_flags);
  
++		if (status > 0 && (unsigned long)status > avail) {
++			ret = ret ? ret : -EIO;
++			break;
++		}
  		if (status > 0) { /* Correct transfer */
 +			if (!is_write && copy_to_user((void __user *)address,
 +						pipe->bounce, status)) {
@@ -263,7 +297,7 @@ index 4f5aa831..a9d0a0d6 100644
  			ret += status;
  			address += status;
  			continue;
-@@ -454,6 +473,10 @@ static irqreturn_t goldfish_pipe_interrupt(int irq, void *dev_id)
+@@ -454,6 +457,10 @@ static irqreturn_t goldfish_pipe_interrupt(int irq, void *dev_id)
  
  		/* Convert channel to struct pipe pointer + read wake flags */
  		wakes = readl(dev->base + PIPE_REG_WAKES);
@@ -274,11 +308,19 @@ index 4f5aa831..a9d0a0d6 100644
  		pipe  = (struct goldfish_pipe *)(ptrdiff_t)channel;
  
  		/* Did the emulator just closed a pipe? */
-@@ -496,6 +519,11 @@ static int goldfish_pipe_open(struct inode *inode, struct file *file)
+@@ -496,6 +503,19 @@ static int goldfish_pipe_open(struct inode *inode, struct file *file)
  	if (pipe == NULL)
  		return -ENOMEM;
  
-+	pipe->bounce = kmalloc(PAGE_SIZE, GFP_KERNEL);
++	/* Large GLES uploads avoid a VM exit for every user page. Fall back
++	 * to one page without reclaim stalls on a fragmented guest. */
++	pipe->bounce_size = 64 * 1024;
++	pipe->bounce = kmalloc(pipe->bounce_size,
++			      GFP_KERNEL | __GFP_NORETRY | __GFP_NOWARN);
++	if (!pipe->bounce) {
++		pipe->bounce_size = PAGE_SIZE;
++		pipe->bounce = kmalloc(pipe->bounce_size, GFP_KERNEL);
++	}
 +	if (!pipe->bounce) {
 +		kfree(pipe);
 +		return -ENOMEM;
@@ -286,7 +328,7 @@ index 4f5aa831..a9d0a0d6 100644
  	pipe->dev = dev;
  	mutex_init(&pipe->lock);
  	init_waitqueue_head(&pipe->wake_queue);
-@@ -507,6 +535,7 @@ static int goldfish_pipe_open(struct inode *inode, struct file *file)
+@@ -507,6 +527,7 @@ static int goldfish_pipe_open(struct inode *inode, struct file *file)
  
  	status = goldfish_cmd_status(pipe, CMD_OPEN);
  	if (status < 0) {
@@ -294,7 +336,7 @@ index 4f5aa831..a9d0a0d6 100644
  		kfree(pipe);
  		return status;
  	}
-@@ -522,6 +551,7 @@ static int goldfish_pipe_release(struct inode *inode, struct file *filp)
+@@ -522,6 +543,7 @@ static int goldfish_pipe_release(struct inode *inode, struct file *filp)
  
  	/* The guest is closing the channel, so tell the emulator right now */
  	goldfish_cmd(pipe, CMD_CLOSE);
@@ -302,7 +344,7 @@ index 4f5aa831..a9d0a0d6 100644
  	kfree(pipe);
  	filp->private_data = NULL;
  	return 0;
-@@ -599,11 +629,18 @@ static int goldfish_pipe_remove(struct platform_device *pdev)
+@@ -599,11 +621,18 @@ static int goldfish_pipe_remove(struct platform_device *pdev)
  	return 0;
  }
  

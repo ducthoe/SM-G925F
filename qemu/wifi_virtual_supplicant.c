@@ -247,7 +247,15 @@ int main(void)
 	signal(SIGTERM, stop);
 	signal(SIGINT, stop);
 	while (running) {
-		poll(sockets, 4, 100);
+		/* Sleep until a command or the next scan/connection deadline.
+		 * An idle virtual radio should not wake an emulated CPU 10 times
+		 * per second, and events should not wait for a polling tick. */
+		long long deadline = scan_at;
+		if (connect_at && (!deadline || connect_at < deadline))
+			deadline = connect_at;
+		long long delay = deadline - now_ms();
+		int timeout = !deadline ? -1 : delay > 0 ? (int)delay : 0;
+		poll(sockets, 4, timeout);
 		for (int i = 0; i < 4; i++)
 			if (sockets[i].revents & POLLIN)
 				command_reply(sockets[i].fd);

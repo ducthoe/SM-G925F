@@ -107,6 +107,9 @@ static int connect_channel(G925Channel *p)
         p->fd = -1;
         return -4;
     }
+    /* GLES commands often wait for a small synchronous reply. Do not
+     * delay the tail of a command behind TCP's Nagle algorithm. */
+    socket_set_nodelay(p->fd);
     fcntl(p->fd, F_SETFL, fcntl(p->fd, F_GETFL) | O_NONBLOCK);
     return 0;
 }
@@ -158,6 +161,7 @@ static int pipe_command(G925PipeState *s, uint32_t channel, uint32_t command,
 {
     G925Channel *p = g_hash_table_lookup(s->channels, GUINT_TO_POINTER(channel));
     uint8_t *data;
+    hwaddr mapped;
     int result;
     if (command == 1) {
         if (p || !channel) {
@@ -213,32 +217,39 @@ static int pipe_command(G925PipeState *s, uint32_t channel, uint32_t command,
         if (!size || size > 16 * 1024 * 1024) {
             return -1;
         }
-        data = g_malloc(size);
+        if (command == 6 && p->fd < 0 && !p->process_pipe) {
+            return -1;
+        }
+        /* The guest supplies a physically contiguous bounce buffer.
+         * Map it for this command only: socket I/O can use RAM directly,
+         * and unmap dirties only bytes actually received. A short mapping
+         * is a normal partial transfer, just like a short socket write. */
+        mapped = size;
+        if (!address_space_access_valid(&address_space_memory, address, size,
+                                        command == 6,
+                                        MEMTXATTRS_UNSPECIFIED)) {
+            return -1;
+        }
+        data = address_space_map(&address_space_memory, address, &mapped,
+                                 command == 6, MEMTXATTRS_UNSPECIFIED);
+        if (!data) {
+            return -2;
+        }
         if (command == 4) {
-            if (address_space_read(&address_space_memory, address,
-                MEMTXATTRS_UNSPECIFIED, data, size) != MEMTX_OK) {
-                g_free(data);
-                return -1;
-            }
-            result = write_channel(p, data, size);
+            result = write_channel(p, data, mapped);
         } else if (p->process_pipe) {
             uint64_t id = cpu_to_le64(p->process_id);
-            result = MIN(size, 8 - MIN(p->process_offset, 8));
+            result = MIN(mapped, 8 - MIN(p->process_offset, 8));
             memcpy(data, (uint8_t *)&id + p->process_offset, result);
             p->process_offset += result;
-        } else if (p->fd < 0) {
-            result = -1;
         } else {
-            result = recv(p->fd, data, size, MSG_DONTWAIT);
+            result = recv(p->fd, data, mapped, MSG_DONTWAIT);
             if (result < 0) {
                 result = errno == EAGAIN ? -2 : -4;
             }
         }
-        if (command == 6 && result > 0) {
-            address_space_write(&address_space_memory, address,
-                                MEMTXATTRS_UNSPECIFIED, data, result);
-        }
-        g_free(data);
+        address_space_unmap(&address_space_memory, data, mapped, command == 6,
+                            result > 0 ? result : 0);
         return result;
     default:
         return -1;
