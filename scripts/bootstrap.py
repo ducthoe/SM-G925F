@@ -171,10 +171,9 @@ def build_kernel(gcc, jobs):
     command(args + ["Image", "modules_prepare"], log="kernel-build.log")
     wifi.mkdir(exist_ok=True)
     net = (source / "drivers/net/virtio_net.c").read_text()
-    original = "dev = alloc_etherdev_mq(sizeof(struct virtnet_info), max_queue_pairs);"
-    if net.count(original) != 1:
-        raise RuntimeError("Unexpected virtio_net source")
-    (wifi / "virtio_net.c").write_text(net.replace(original, original + '\n\tif (dev)\n\t\tstrlcpy(dev->name, "wlan%d", IFNAMSIZ);'))
+    (wifi / "virtio_net.c").write_text(net)
+    command(["patch", "--batch", "--forward", "--fuzz=0", wifi / "virtio_net.c",
+             ROOT / "kernel/wifi/virtio-net-names.patch"], log="kernel-build.log")
     for name in ("dhd.c", "Makefile"):
         shutil.copyfile(ROOT / "kernel/wifi" / name, wifi / name)
     command(args + [f"M={wifi}", "modules"], log="kernel-build.log")
@@ -313,6 +312,8 @@ def main():
     parser.add_argument("--build-only", action="store_true", help="prepare everything without opening a VM")
     parser.add_argument("--no-install", action="store_true", help="report missing packages without sudo")
     parser.add_argument("--renderer", choices=("auto", "hardware", "software"), default="auto")
+    parser.add_argument("--adb-port", type=int, default=5555,
+                        help="localhost ADB port (default: 5555)")
     parser.add_argument("--ram", type=int, help="guest RAM in MiB (up to 4096 by default)")
     parser.add_argument("--cpus", type=int, default=min(4, os.cpu_count() or 1))
     parser.add_argument("--jobs", type=int, default=min(6, os.cpu_count() or 1))
@@ -329,6 +330,8 @@ def main():
         parser.error("Provide an existing firmware .rar file")
     if args.jobs < 1 or not 1 <= args.cpus <= 8 or (args.ram is not None and not 2048 <= args.ram <= 4096):
         parser.error("Use jobs >= 1, 1–8 CPUs, and 2048–4096 MiB RAM")
+    if not 1 <= args.adb_port <= 65535:
+        parser.error("Use an ADB port between 1 and 65535")
     if any(character.isspace() for character in str(ROOT)):
         parser.error("Put this checkout in a path without whitespace (legacy kernel Makefiles require it)")
     if not args.build_only and not os.environ.get("DISPLAY"):

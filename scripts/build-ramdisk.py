@@ -39,6 +39,13 @@ def build(source, output):
         init = tree / "init.rc"
         init.write_text(replace_once(init.read_text(), "import /init.${ro.hardware}.rc\n",
                                     "import /init.${ro.hardware}.rc\nimport /init.g925emu.rc\n"))
+        properties = tree / "default.prop"
+        properties.write_text(replace_once(properties.read_text(), "ro.adb.secure=1\n",
+                                            "ro.adb.secure=0\n") + "service.adb.tcp.port=5555\n")
+        # The virtual phone has no USB gadget. USB mode transitions must
+        # not stop the TCP daemon used by the isolated debugging link.
+        for rc in tree.glob("init*.usb.rc"):
+            rc.write_text(re.sub(r"(?m)^    stop adbd\n", "", rc.read_text()))
         for name, services in SERVICES.items():
             rc = tree / name
             text = rc.read_text()
@@ -62,6 +69,7 @@ def build(source, output):
         (tree / "sbin").mkdir(exist_ok=True)
         files = {"busybox": WORK / "tools/busybox", "virtio_net.ko": WORK / "wifi/virtio_net.ko",
                  "dhd.ko": WORK / "wifi/dhd.ko", "g925-first-boot.sh": ROOT / "guest/first-boot.sh",
+                 "adb-start.sh": ROOT / "guest/adb-start.sh",
                  "g925_headset.ko": WORK / "audio/g925_headset.ko", "audio-relay": WORK / "audio/audio-relay",
                  "audio-start.sh": ROOT / "guest/audio-start.sh", "g925-sdcard": WORK / "storage/g925-sdcard"}
         for name, original in files.items():
@@ -79,6 +87,7 @@ def build(source, output):
         lines.extend(["", "on early-init", "    setprop ro.radio.noril yes", "",
                       "on post-fs-data", "    insmod /sbin/virtio_net.ko", "    insmod /sbin/dhd.ko",
                       "    insmod /sbin/g925_headset.ko", "    start g925audio", "    start g925supersu",
+                      "    start g925adb",
                       "    chmod 0666 /sys/module/dhd/parameters/firmware_path",
                       "    chmod 0666 /sys/module/dhd/parameters/nvram_path",
                       "    setprop wlan.driver.status ok", "", "on boot",
@@ -89,6 +98,8 @@ def build(source, output):
                       "    disabled", "    oneshot", "    seclabel u:r:init:s0", "",
                       "service g925audio /sbin/busybox sh /sbin/audio-start.sh",
                       "    disabled", "    seclabel u:r:init:s0", "",
+                      "service g925adb /sbin/busybox sh /sbin/adb-start.sh",
+                      "    disabled", "    oneshot", "    seclabel u:r:init:s0", "",
                       "service g925supersu /system/xbin/daemonsu --auto-daemon",
                       "    class main", "    user root", "    group root",
                       "    disabled", "    oneshot", "    seclabel u:r:init:s0"])

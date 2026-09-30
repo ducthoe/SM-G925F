@@ -106,6 +106,7 @@ Add these to `./run.sh` (or after the firmware path on the first build):
 | --- | --- |
 | `--ram 4096 --cpus 4` | Assign 4 GB RAM and four virtual CPUs |
 | `--renderer software` | Use software graphics if your GPU driver fails |
+| `--adb-port 5557` | Choose a different localhost ADB port (default: 5555) |
 | `--jobs 2` | Reduce memory use while compiling |
 | `--build-only` | Download and build without opening Android |
 | `--no-install` | Report missing dependencies without installing packages |
@@ -115,15 +116,27 @@ The default is up to **4 GB RAM and four virtual CPUs**. CPU emulation and softw
 
 ## Install APKs
 
-In a terminal on your PC, open the folder containing the APK and run:
+Install [Android SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools) on your PC so `adb` is on your `PATH`. Start the emulator with `./run.sh`, wait for Android to boot, then run:
 
 ```sh
-python3 -m http.server 8000 --bind 127.0.0.1
+adb connect 127.0.0.1:5555
+adb -s 127.0.0.1:5555 install -r "/path/to/app.apk"
 ```
 
-In Android's browser, visit **http://10.0.2.2:8000**, download the APK, and open it from Downloads. Enable **Lock screen and security → Unknown sources** when asked. Use ARM/ARM64 APKs compatible with Android 5.0 (API 21).
+Use ARM/ARM64 APKs compatible with Android 5.0 (API 21). `-r` updates an existing app while preserving its data.
 
-The emulated SD card uses your phone's saved data partition; downloaded files persist between launches.
+ADB also supports a shell, logcat, and file transfers:
+
+```sh
+adb -s 127.0.0.1:5555 shell
+adb -s 127.0.0.1:5555 logcat
+adb -s 127.0.0.1:5555 push local-file /sdcard/
+adb -s 127.0.0.1:5555 pull /sdcard/Download/
+```
+
+The host port is bound to `127.0.0.1`. ADB starts automatically over a separate virtual network link and works with Android Wi-Fi turned off. This local emulator connection does not require a USB debugging authorization prompt; the firmware's shell permissions are retained. Root commands can use the included SuperSU.
+
+If port 5555 is occupied, launch with `./run.sh --adb-port 5557` and use `127.0.0.1:5557` in the commands above. After updating this project, close the emulator and start it again with `./run.sh`; the changed network module and ramdisk rebuild automatically.
 
 ## Common problems
 
@@ -138,6 +151,8 @@ The emulated SD card uses your phone's saved data partition; downloaded files pe
 **The browser reports no SD card:** update with `git pull`, close the current QEMU window, and launch with `./run.sh` again. The updated ramdisk starts the compatible emulated-storage daemon; your existing data is kept.
 
 **There is no sound:** check Android's volume, the selected Linux audio output, and `logs/audio-host.log`. Playback supports PipeWire, PulseAudio, or ALSA.
+
+**ADB does not connect:** wait for Android to boot, check the ADB address printed by the launcher, then run `adb disconnect 127.0.0.1:5555` followed by `adb connect 127.0.0.1:5555`. Use your selected port if you passed `--adb-port`. Guest startup diagnostics are in `/data/g925-adb.log`.
 
 **It says another emulator is running:** this checkout allows one session at a time. Close its existing window before starting another.
 

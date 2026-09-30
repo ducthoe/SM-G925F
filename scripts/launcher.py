@@ -151,6 +151,8 @@ def launch(options, qemu, kernel, system, ramdisk, state):
                     "-monitor", f"unix:{runtime / 'monitor.sock'},server=on,wait=off",
                     "-netdev", "user,id=wifi,net=10.0.2.0/24,dhcpstart=10.0.2.15",
                     "-device", "virtio-net-device,netdev=wifi,mac=52:54:00:25:00:01,x-disable-legacy-check=on",
+                    "-netdev", f"user,id=adb,net=10.0.3.0/24,dhcpstart=10.0.3.15,restrict=on,hostfwd=tcp:127.0.0.1:{options.adb_port}-10.0.3.15:5555",
+                    "-device", "virtio-net-device,netdev=adb,mac=52:54:00:25:00:02,x-disable-legacy-check=on",
                     "-device", "virtio-tablet-device,x-disable-legacy-check=on",
                     "-device", "virtio-keyboard-device,x-disable-legacy-check=on"]
             # MMIO discovery is reversed by this virt machine version. Keep
@@ -166,10 +168,12 @@ def launch(options, qemu, kernel, system, ramdisk, state):
                 link.symlink_to(runtime / target)
             with (LOGS / "qemu.log").open("ab") as output:
                 vm = subprocess.Popen(args, env=environment, stdout=output, stderr=subprocess.STDOUT)
-            write_json(WORK / "session.json", {"pid": vm.pid, "renderer_pid": gpu.pid, "audio_pid": audio.pid, "audio_port": audio_port, "ram_mib": ram,
+            write_json(WORK / "session.json", {"pid": vm.pid, "renderer_pid": gpu.pid, "audio_pid": audio.pid, "audio_port": audio_port,
+                       "adb_port": options.adb_port, "ram_mib": ram,
                        "cpus": options.cpus, "state_dir": str(state), "console": str(runtime / "console.sock"),
                        "qmp": str(runtime / "qmp.sock"), "command": args})
             print(f"Starting Android: {ram} MiB RAM, {options.cpus} vCPUs, 720×1280 screen.", flush=True)
+            print(f"ADB: adb connect 127.0.0.1:{options.adb_port}", flush=True)
             print(f"Logs: {LOGS}\nGuest disks: {state}\nClose the QEMU window to stop.", flush=True)
             while vm.poll() is None:
                 if gpu.poll() is not None:

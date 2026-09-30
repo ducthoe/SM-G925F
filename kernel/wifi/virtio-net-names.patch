@@ -1,0 +1,16 @@
+--- a/virtio_net.c
++++ b/virtio_net.c
+@@ -1576,6 +1576,13 @@
+ 				  dev->dev_addr, dev->addr_len) < 0)
+ 		eth_hw_addr_random(dev);
+ 
++	/* Give the isolated ADB link a stable name independent of probe order.
++	 * Samsung's Wi-Fi services must continue to see the radio as wlan0. */
++	if (!memcmp(dev->dev_addr, "\x52\x54\x00\x25\x00\x02", ETH_ALEN))
++		strlcpy(dev->name, "adb%d", IFNAMSIZ);
++	else
++		strlcpy(dev->name, "wlan%d", IFNAMSIZ);
++
+ 	/* Set up our device-specific information */
+ 	vi = netdev_priv(dev);
+ 	vi->dev = dev;
