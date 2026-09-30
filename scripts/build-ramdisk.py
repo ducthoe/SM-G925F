@@ -17,6 +17,9 @@ SERVICES = {
     "init.rc": ("icd", "ril-daemon", "SMD-daemon", "DR-daemon", "BCS-daemon", "at_distributor"),
     "init.baseband.rc": ("cpboot-daemon", "DIAG-daemon"),
     "init.gps.rc": ("lhd", "gpsd"),
+    # The emulator kernel has no Samsung SDP netlink endpoint. This daemon
+    # exits immediately and init otherwise retries it every five seconds.
+    "init.container.rc": ("sdp_cryptod",),
     "init.samsungexynos7420.rc": ("argos-daemon", "ipsec-daemon", "mobicore", "secure_storage", "watchdogd"),
 }
 

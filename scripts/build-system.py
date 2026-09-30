@@ -11,6 +11,11 @@ from common import ROOT, WORK, command, digest
 from firmware import SUPPORTED_SERVICES, SUPPORTED_SURFACEFLINGER, debugfs, dump, quote
 from supersu import bundle as supersu_bundle
 
+SUPPORTED_HWUI = {
+    "lib": "88bb5f0145ad863f3d4037a735af3682c1b1eabfba29591e63758ea6458405b5",
+    "lib64": "3522c4f2e30ea4ffd7a0947e01bbd591ef2fb415fd58395ad692542d3dc20851",
+}
+
 
 def exists(image, path):
     try:
@@ -82,6 +87,21 @@ def build(source, output):
         surfaceflinger.write_bytes(data)
         install(temporary, surfaceflinger, "/lib64/libsurfaceflinger.so", library_label)
 
+        # Samsung's shader-binary switch exceeds Android 5's 31-character
+        # property-name limit. Give it a usable name without moving ELF data.
+        for bits, expected in SUPPORTED_HWUI.items():
+            hwui = temp / f"{bits}-libhwui.so"
+            dump(source, f"/{bits}/libhwui.so", hwui)
+            if digest(hwui) != expected:
+                raise RuntimeError(f"Unsupported {bits} HWUI binary")
+            data = hwui.read_bytes()
+            old = b"debug.hwui.disable_binary_shader_opt\0"
+            new = b"debug.hwui.disable_shader_bin\0"
+            if data.count(old) != 1 or len(new) > 32:
+                raise RuntimeError(f"Unexpected {bits} HWUI shader property")
+            hwui.write_bytes(data.replace(old, new.ljust(len(old), b"\0")))
+            install(temporary, hwui, f"/{bits}/libhwui.so", library_label)
+
         services = temp / "services.odex"
         dump(source, "/framework/arm64/services.odex", services)
         if digest(services) != SUPPORTED_SERVICES:
@@ -131,7 +151,18 @@ def build(source, output):
                    "ro.product.locale.region": "GB", "ro.radio.noril": "yes",
                    # MDPP selects Samsung's unavailable hardware PIN store.
                    # Keep Android's salted software credential verification.
-                   "ro.security.mdpp.ux": "Disabled"}
+                   "ro.security.mdpp.ux": "Disabled",
+                   # Retain six cached apps without holding as many graphics
+                   # contexts as the eight-app setting.
+                   "ro.config.dha_cached_max": "6",
+                   # Samsung HWUI queries program binaries unsupported by
+                   # the SDK renderer. Its stale GL error breaks layer creation.
+                   "debug.hwui.disable_shader_bin": "true",
+                   # Retain modest allocation headroom between collections.
+                   # Keep the stock per-app growth and maximum heap limits.
+                   "dalvik.vm.heapstartsize": "16m",
+                   "dalvik.vm.heapminfree": "4m",
+                   "dalvik.vm.heapmaxfree": "16m"}
         for key, value in updates.items():
             pattern = rf"(?m)^{re.escape(key)}=.*$"
             if re.search(pattern, text):

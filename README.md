@@ -112,6 +112,17 @@ The adapted system image also omits Samsung's **Device Test** app.
 After updating, restart with `./run.sh` to rebuild the changed components
 automatically and enable the keyboard shortcuts. Your saved phone data is kept.
 
+For app switching, the firmware now keeps **six cached apps**, up from four.
+ART retains 4–16 MB of free allocation space and starts with a 16 MB heap;
+the stock 256 MB growth limit and 512 MB maximum heap are retained. The kernel
+supports full preemption so foreground work can interrupt background kernel
+work. Samsung's unsupported `sdp_cryptod` service is disabled to stop its restart
+loop. These changes rebuild the kernel, matching modules, system image and
+ramdisk automatically on the next run.
+
+Recents disables an incompatible shader-binary optimization that could prevent
+app-card graphics layers from being created and crash SystemUI.
+
 ![Settings screen after the performance update](docs/performance-screen.png)
 
 ## Useful options
