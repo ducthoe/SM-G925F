@@ -84,6 +84,30 @@ Keep `state/` when updating the project. To try a separate, fresh phone without 
 ./run.sh --state-dir "$PWD/state/fresh-phone"
 ```
 
+## Minimal debloat mode
+
+For a smaller app selection, launch with:
+
+```sh
+./run.sh --debloat
+```
+
+Debloat keeps the TouchWiz launcher, keyboard, Settings, Play Store and its Google
+services, browser, clock, calculator, calendar, contacts, messages, gallery, and
+file manager, together with essential Android services and accessibility tools.
+It removes extra Samsung apps and services such as S Health, S Voice, Galaxy
+Apps, Samsung account/cloud, themes, Edge panels, Smart Manager, and bundled
+social, Microsoft, and Google media apps. The underlying Samsung UI remains.
+
+Pass `--debloat` on each launch, including with `--build-only`. To return to the
+regular app selection, use `./run.sh --no-debloat` (or simply omit `--debloat`).
+Switching modes automatically rebuilds the adapted system image from the
+preserved stock firmware. Saved phone data and apps you installed yourself stay
+in `state/`; for a clean minimal phone, combine `--debloat` with a new
+`--state-dir`.
+
+**Fingerprint and Smart Remote are removed in both modes.**
+
 ## Update and rebuild
 
 **A full rebuild is recommended after installing this performance update.** It changes the guest GLES driver, QEMU graphics transport, display conversion, and idle Wi-Fi/audio handling. GLES transfers now use batches of up to 64 KiB, and the display avoids an extra full-frame copy and per-pixel division.
@@ -135,6 +159,7 @@ Add these to `./run.sh` (or after the firmware path on the first build):
 | `--renderer software` | Use software graphics if your GPU driver fails |
 | `--adb-port 5557` | Choose a different localhost ADB port (default: 5555) |
 | `--jobs 2` | Reduce memory use while compiling |
+| `--debloat` / `--no-debloat` | Enable the minimal app selection / return to the regular selection (default: off) |
 | `--build-only` | Download and build without opening Android |
 | `--no-install` | Report missing dependencies without installing packages |
 | `--help` | Show all options |

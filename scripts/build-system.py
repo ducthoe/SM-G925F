@@ -2,8 +2,8 @@
 """Make one adapted image while preserving the extracted stock filesystem."""
 
 import argparse
-import os
 import re
+import stat
 import tempfile
 from pathlib import Path
 
@@ -14,6 +14,50 @@ from supersu import bundle as supersu_bundle
 SUPPORTED_HWUI = {
     "lib": "88bb5f0145ad863f3d4037a735af3682c1b1eabfba29591e63758ea6458405b5",
     "lib64": "3522c4f2e30ea4ffd7a0947e01bbd591ef2fb415fd58395ad692542d3dc20851",
+}
+
+# These hardware services and setup apps are unsuitable for either profile.
+ALWAYS_REMOVED_APPS = (
+    "/app/imsservice", "/app/ImsTelephonyService", "/app/ImsSettings",
+    "/priv-app/ImsLogger+", "/app/NfcNci", "/priv-app/SetupWizard",
+    "/app/SecSetupWizard2015", "/app/KnoxSetupWizardClient",
+    "/priv-app/DeviceTest", "/priv-app/FingerprintService2",
+    "/priv-app/SmartRemoteStub_zero", "/app/withTV",
+)
+ALWAYS_REMOVED_FILES = (
+    "/etc/permissions/com.sec.feature.fingerprint_manager_service.xml",
+    "/etc/permissions/android.hardware.consumerir.xml",
+    "/bin/bauthserver", "/bin/vcsFPService",
+    "/lib/hw/consumerir.exynos5.so", "/lib64/hw/consumerir.exynos5.so",
+)
+
+# A minimal app set for the supported firmware. Keep Android providers,
+# credential handling, accessibility, and Samsung's shared UI resources as
+# well as the launcher, keyboard, Play Store, and everyday utilities.
+# Framework JARs and native libraries stay available to the stock UI.
+MINIMAL_APPS = {
+    "/app": frozenset((
+        "AssistantMenu2_ZERO", "BadgeProvider", "Bluetooth", "BrowserProviderProxy",
+        "CaptivePortalLogin", "CertInstaller", "ClipboardSaveService", "ClipboardUIService",
+        "ClockPackage_L", "DocumentsUI", "EmergencyLauncher", "EmergencyModeService",
+        "EmergencyProvider", "GoogleCalendarSyncAdapter", "GoogleContactsSyncAdapter",
+        "InCallUI", "KeyChain", "PackageInstaller", "PacProcessor", "PopupuiReceiver",
+        "SamsungIMEv2", "SamsungSans", "SamsungTTS", "SBrowser_3.0.38", "SecCalculator2_L",
+        "SecHTMLViewer", "SPlanner_Material", "STalkback", "SuperSU", "TasksProvider",
+        "UserDictionaryProvider", "WebViewGoogle", "minimode-res", "secvisualeffect-res",
+    )),
+    "/priv-app": frozenset((
+        "BackupRestoreConfirmation", "CSC", "DefaultContainerService",
+        "ExternalStorageProvider", "FusedLocation", "GmsCore", "GoogleBackupTransport",
+        "GoogleLoginService", "GooglePartnerSetup", "GoogleServicesFramework",
+        "InputDevices", "LogsProvider", "MmsService", "MtpApplication", "Phonesky",
+        "ProxyHandler", "SecCalendarProvider_NOTSTICKER", "SecContactsProvider",
+        "SecContacts_L", "SecDownloadProvider", "SecGallery2015", "SecMediaProvider",
+        "SecMms_Delight_Open", "SecMyFiles2015", "SecSettings2", "SecSettingsProvider2",
+        "SecTelephonyProvider_Candy", "SettingsReceiver", "SharedStorageBackup", "Shell",
+        "SystemUI", "Telecom", "TeleService", "VpnDialogs", "WallpaperCropper",
+        "WallpaperPicker_Zero", "TouchWizHome_ZERO",
+    )),
 }
 
 
@@ -27,19 +71,50 @@ def exists(image, path):
         raise
 
 
+def image_entries(image, path):
+    for line in debugfs(image, f"ls -p {quote(path)}").splitlines():
+        fields = line.split("/")
+        if len(fields) >= 7 and fields[5] not in (".", "..", ""):
+            yield fields[5], int(fields[2], 8)
+
+
 def remove_tree(image, path):
     if not exists(image, path):
         return
-    for line in debugfs(image, f"ls -p {quote(path)}").splitlines():
-        fields = line.split("/")
-        if len(fields) < 7 or fields[5] in (".", "..", ""):
-            continue
-        child = path + "/" + fields[5]
-        if int(fields[2], 8) & 0o170000 == 0o040000:
+    for name, mode in image_entries(image, path):
+        child = path + "/" + name
+        if stat.S_ISDIR(mode):
             remove_tree(image, child)
         else:
             debugfs(image, f"rm {quote(child)}", write=True)
     debugfs(image, f"rmdir {quote(path)}", write=True)
+
+
+def remove_apps(image, *, debloat=False):
+    for path in ALWAYS_REMOVED_APPS:
+        remove_tree(image, path)
+    for path in ALWAYS_REMOVED_FILES:
+        if exists(image, path):
+            debugfs(image, f"rm {quote(path)}", write=True)
+    if not debloat:
+        return
+    removed = 0
+    for base, keep in MINIMAL_APPS.items():
+        for name, mode in image_entries(image, base):
+            if name in keep or name.removesuffix(".apk") in keep:
+                continue
+            path = base + "/" + name
+            if stat.S_ISDIR(mode):
+                # Leave non-app assets, such as MobiCore registry files.
+                if not any(child.endswith(".apk") for child, _ in image_entries(image, path)):
+                    continue
+                remove_tree(image, path)
+            elif name.endswith(".apk"):
+                debugfs(image, f"rm {quote(path)}", write=True)
+            else:
+                continue
+            removed += 1
+    print(f"Debloat: removed {removed} extra preinstalled apps.", flush=True)
 
 
 def install(image, source, target, label, *, executable=False):
@@ -60,7 +135,7 @@ def patch_instruction(data, offset, before, after):
     data[offset:offset + len(before)] = after
 
 
-def build(source, output):
+def build(source, output, *, debloat=False):
     temporary = output.with_name(output.name + ".partial")
     command(["cp", "--reflink=auto", "--sparse=always", source, temporary])
     with tempfile.TemporaryDirectory(prefix="g925-system-", dir=WORK) as directory:
@@ -171,6 +246,12 @@ def build(source, output):
                 text += f"\n{key}={value}\n"
         properties.write_text(text)
         install(temporary, properties, "/build.prop", file_label)
+        features = temp / "floating_feature.xml"
+        dump(source, "/etc/floating_feature.xml", features)
+        features.write_text(features.read_text().replace(
+            "<SEC_FLOATING_FEATURE_WEB_SUPPORT_FINGERPRINT_WEBSIGNIN>TRUE",
+            "<SEC_FLOATING_FEATURE_WEB_SUPPORT_FINGERPRINT_WEBSIGNIN>FALSE"))
+        install(temporary, features, "/etc/floating_feature.xml", file_label)
         install(temporary, WORK / "wifi/wifi-virtual-supplicant", "/bin/wpa_supplicant", wpa_label, executable=True)
         install(temporary, WORK / "wifi/dhd.ko", "/lib/modules/dhd.ko", file_label)
         for bits in ("lib", "lib64"):
@@ -194,15 +275,7 @@ def build(source, output):
         marker.write_text("1\n")
         install(temporary, marker, "/etc/.installed_su_daemon", file_label)
 
-        # Persistent IMS processes ignore force-stop; omit their APKs from the
-        # emulator copy so they cannot restart and display modem crash dialogs.
-        for path in ("/app/imsservice", "/app/ImsTelephonyService", "/app/ImsSettings",
-                     "/priv-app/ImsLogger+", "/app/NfcNci", "/priv-app/SetupWizard",
-                     "/app/SecSetupWizard2015", "/app/KnoxSetupWizardClient"):
-            remove_tree(temporary, path)
-        # Samsung's Device Test (com.sec.factory) probes physical hardware
-        # that this virtual phone does not have.
-        remove_tree(temporary, "/priv-app/DeviceTest")
+        remove_apps(temporary, debloat=debloat)
     temporary.replace(output)
     print(f"Prepared {output}", flush=True)
 
@@ -211,5 +284,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--debloat", action=argparse.BooleanOptionalAction, default=False,
+                        help="keep only essential apps and basic utilities")
     args = parser.parse_args()
-    build(args.source, args.output)
+    build(args.source, args.output, debloat=args.debloat)

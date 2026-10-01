@@ -125,7 +125,7 @@ def build_kernel(gcc, jobs):
     stamp = build / ".g925-build"
     outputs = [build / "arch/arm64/boot/Image", build / "System.map", wifi / "virtio_net.ko", wifi / "dhd.ko"]
     if cached(stamp, key, outputs):
-        print("Using cached kernel and Wi-Fi modules.", flush=True)
+        print("Using cached kernel.", flush=True)
         return build
     patch_stamp = source / ".g925-patches"
     upstream = VERSIONS["sources"]["kernel"]["commit"]
@@ -189,7 +189,7 @@ def build_graphics(downloads, ndk, firmware, firmware_key, jobs):
     outputs = [WORK / "emugl-compatible/lib/hw/gralloc.goldfish.so",
                WORK / "emugl-compatible/lib64/hw/gralloc.goldfish.so", WORK / "wifi/wifi-virtual-supplicant"]
     if cached(stamp, key, outputs):
-        print("Using cached compatible graphics drivers.", flush=True)
+        print("Using cached graphics drivers.", flush=True)
         return
     for name, destination in (("goldfish", "goldfish-opengl-reference"), ("core", "aosp-core-headers"), ("hardware", "aosp-hardware-headers")):
         checkout(name, WORK / destination)
@@ -223,7 +223,7 @@ def build_graphics(downloads, ndk, firmware, firmware_key, jobs):
     stamp.write_text(key + "\n")
 
 
-def prepare_images(firmware, firmware_key):
+def prepare_images(firmware, firmware_key, *, debloat=False):
     system = firmware / "system-g925emu.img"
     ramdisk = firmware / "ramdisk-g925emu.gz"
     supersu = supersu_bundle()
@@ -231,11 +231,15 @@ def prepare_images(firmware, firmware_key):
                              *(supersu / name for name in VERSIONS["supersu"]["sha256"]),
                              ROOT / "guest/audio_policy.conf",
                              WORK / "audio/lib/audio.primary.g925emu.so", WORK / "audio/lib64/audio.primary.g925emu.so",
-                             WORK / "emugl-compatible", WORK / "wifi/dhd.ko", WORK / "wifi/wifi-virtual-supplicant", extra=firmware_key)
+                             WORK / "emugl-compatible", WORK / "wifi/dhd.ko", WORK / "wifi/wifi-virtual-supplicant",
+                             extra=firmware_key + f":debloat={int(debloat)}")
     stamp = firmware / ".system-build"
     if not cached(stamp, system_key, [system]):
-        print("Applying firmware graphics, input and modem compatibility patches...", flush=True)
-        command([sys.executable, ROOT / "scripts/build-system.py", firmware / "stock.raw.img", system], log="system-build.log")
+        print("Preparing Android...", flush=True)
+        args = [sys.executable, ROOT / "scripts/build-system.py", firmware / "stock.raw.img", system]
+        if debloat:
+            args.append("--debloat")
+        command(args, log="system-build.log")
         stamp.write_text(system_key + "\n")
     ramdisk_key = fingerprint(ROOT / "scripts/build-ramdisk.py", ROOT / "guest", WORK / "wifi/virtio_net.ko", WORK / "wifi/dhd.ko",
                               WORK / "audio/audio-relay", WORK / "audio/g925_headset.ko",
@@ -256,7 +260,7 @@ def build_audio(gcc, ndk, jobs, firmware):
     outputs = [audio / "audio-relay", audio / "g925_headset.ko",
                audio / "lib/audio.primary.g925emu.so", audio / "lib64/audio.primary.g925emu.so"]
     if cached(stamp, key, outputs):
-        print("Using cached audio relay and headphone module.", flush=True)
+        print("Using cached audio support.", flush=True)
         return
     audio.mkdir(exist_ok=True)
     compiler = ndk / "toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
@@ -289,7 +293,7 @@ def build_storage(ndk, firmware, firmware_key):
                       extra=firmware_key + VERSIONS["downloads"]["ndk"]["sha256"])
     stamp = storage / ".g925-build"
     if cached(stamp, key, [binary]):
-        print("Using cached emulated-storage daemon.", flush=True)
+        print("Using cached storage support.", flush=True)
         return
     include = storage / "include/linux"
     include.mkdir(parents=True, exist_ok=True)
@@ -311,6 +315,8 @@ def main():
     parser.add_argument("--firmware-id", help="select an extracted firmware cache by its ID or SHA-256 prefix")
     parser.add_argument("--build-only", action="store_true", help="prepare everything without opening a VM")
     parser.add_argument("--no-install", action="store_true", help="report missing packages without sudo")
+    parser.add_argument("--debloat", action=argparse.BooleanOptionalAction, default=False,
+                        help="keep only essential apps and basic utilities (default: off)")
     parser.add_argument("--renderer", choices=("auto", "hardware", "software"), default="auto")
     parser.add_argument("--adb-port", type=int, default=5555,
                         help="localhost ADB port (default: 5555)")
@@ -354,11 +360,11 @@ def main():
         build_graphics(args.downloads.resolve(), ndk, firmware, firmware_key, args.jobs)
         build_audio(gcc, ndk, args.jobs, firmware)
         build_storage(ndk, firmware, firmware_key)
-        system, ramdisk = prepare_images(firmware, firmware_key)
+        system, ramdisk = prepare_images(firmware, firmware_key, debloat=args.debloat)
         from launcher import prepare_state, launch
         state = args.state_dir.resolve() if args.state_dir else ROOT / "state" / firmware_key[:16]
         prepare_state(state, firmware / "hidden.raw.img")
-        print("Build complete. Cached builds and writable guest disks are ready.", flush=True)
+        print("Build complete.", flush=True)
         if not args.build_only:
             return launch(args, qemu, kernel, system, ramdisk, state)
     return 0
