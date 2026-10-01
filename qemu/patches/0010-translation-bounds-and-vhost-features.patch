@@ -1,0 +1,30 @@
+--- a/accel/tcg/translator.c
++++ b/accel/tcg/translator.c
+@@ -276,6 +276,9 @@
+          * The unaligned read is never atomic.
+          */
+         size_t len0 = -(pc | TARGET_PAGE_MASK);
++
++        /* Keep the partial-read bound explicit for LTO range analysis. */
++        assert(len0 <= len);
+         memcpy(dest, host + (pc - base), len0);
+         pc += len0;
+         dest += len0;
+--- a/hw/net/virtio-net.c
++++ b/hw/net/virtio-net.c
+@@ -968,11 +968,12 @@
+ 
+     for (i = 0;  i < n->max_queue_pairs; i++) {
+         NetClientState *nc = qemu_get_subqueue(n->nic, i);
+-
+-        if (!get_vhost_net(nc->peer)) {
++        VHostNetState *vhost_net = get_vhost_net(nc->peer);
++
++        if (!vhost_net) {
+             continue;
+         }
+-        vhost_net_ack_features_ex(get_vhost_net(nc->peer), features);
++        vhost_net_ack_features_ex(vhost_net, features);
+ 
+         /*
+          * keep acked_features in NetVhostUserState up-to-date so it

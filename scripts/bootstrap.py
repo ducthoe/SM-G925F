@@ -74,14 +74,26 @@ def build_qemu(downloads, jobs):
     source = WORK / "qemu-g925-src"
     binary = source / "build/qemu-system-aarch64"
     upstream = VERSIONS["downloads"]["qemu"]["sha256"]
-    key = fingerprint(ROOT / "qemu/hw", ROOT / "qemu/patches",
-                      extra=upstream + "aarch64-softmmu,gtk,slirp,no-rust")
+    patch_key = fingerprint(ROOT / "qemu/hw", ROOT / "qemu/patches",
+                            extra=upstream + "aarch64-softmmu,gtk,slirp,no-rust")
+    configure_args = ["--target-list=aarch64-softmmu", "--disable-docs",
+                      "--disable-werror", "--disable-sdl", "--disable-rust",
+                      "--enable-gtk", "--enable-slirp", "--enable-lto",
+                      "--extra-cflags=-O3 -march=native -mtune=native"]
+    # Rebuild if a generated native binary is moved to a different host.
+    # CPU frequency and load are deliberately excluded from the cache key.
+    cpu_info = Path("/proc/cpuinfo").read_text()
+    host_cpu = next((line.partition(":")[2].strip() for line in cpu_info.splitlines()
+                     if line.startswith("flags")), "")
+    configuration = json.dumps(configure_args) + platform.machine() + host_cpu
+    config_key = fingerprint(ROOT / "versions.json", extra=configuration)
+    key = patch_key + config_key
     stamp = source / ".g925-build"
     if cached(stamp, key, [binary]):
         print("Using cached patched QEMU.", flush=True)
         return binary
     source_key = source / ".g925-patches"
-    if not cached(source_key, key, [source / "configure"]):
+    if not cached(source_key, patch_key, [source / "configure"]):
         archive = download("qemu", downloads)
         if not cached(source / ".g925-upstream", upstream, [source / "configure"]):
             if source.exists():
@@ -106,12 +118,13 @@ def build_qemu(downloads, jobs):
             command(["patch", "--batch", "--forward", "--fuzz=0", "-p1", "-i", patch], cwd=source, log="qemu-build.log")
         for name in ("s6_vfb_display.c", "g925_goldfish_pipe.c"):
             shutil.copyfile(ROOT / "qemu/hw/display" / name, source / "hw/display" / name)
-        source_key.write_text(key + "\n")
+        source_key.write_text(patch_key + "\n")
     print(f"Compiling patched QEMU ({jobs} jobs); log: {LOGS / 'qemu-build.log'}", flush=True)
-    if not (source / "build/build.ninja").exists():
-        command([source / "configure", "--target-list=aarch64-softmmu", "--disable-docs",
-                 "--disable-werror", "--disable-sdl", "--disable-rust", "--enable-gtk", "--enable-slirp"],
+    config_stamp = source / ".g925-config"
+    if not cached(config_stamp, config_key, [source / "build/build.ninja"]):
+        command([source / "configure", *configure_args],
                 cwd=source, log="qemu-build.log")
+        config_stamp.write_text(config_key + "\n")
     command(["ninja", "-C", source / "build", f"-j{jobs}", "qemu-system-aarch64"], log="qemu-build.log")
     stamp.write_text(key + "\n")
     return binary
