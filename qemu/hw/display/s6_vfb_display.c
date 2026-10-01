@@ -45,6 +45,7 @@ struct S6VfbDisplayState {
     bool full_update;
     bool frame_ready;
     bool display_blank;
+    bool landscape;
     bool have_visible_frame;
     DisplaySurface *last_surf;
     uint64_t frame_count;
@@ -173,6 +174,7 @@ static uint64_t s6_vfb_read(void *opaque, hwaddr offset, unsigned size)
     case 24: return s->frame_height;
     case 32: return s->display_blank;
     case 36: return 0; /* Reserved; formerly an empty-frame debug counter. */
+    case 40: return s->landscape;
     default: return 0;
     }
 }
@@ -345,7 +347,9 @@ static bool s6_vfb_update(void *opaque)
     DisplaySurface *surf = qemu_console_surface(s->con);
     uint8_t *dst;
     int stride;
-    uint32_t first_changed = s->output_height, last_changed = 0;
+    uint32_t width = s->landscape ? s->output_height : s->output_width;
+    uint32_t height = s->landscape ? s->output_width : s->output_height;
+    uint32_t first_changed = height, last_changed = 0;
 
     if (!s->display_blank) {
         if (s->host_frames) {
@@ -367,20 +371,36 @@ static bool s6_vfb_update(void *opaque)
     }
     dst = surface_data(surf);
     stride = surface_stride(surf);
-    for (uint32_t y = 0; y < s->output_height; y++) {
-        uint32_t src_y = s->source_y[y];
-        size_t row_bytes = s->output_width * 4;
+    for (uint32_t y = 0; y < height; y++) {
+        size_t row_bytes = width * 4;
         uint8_t *row = dst + (size_t)y * stride;
 
         if (s->display_blank) {
             memset(s->row_buffer, 0, row_bytes);
+        } else if (s->landscape) {
+            uint32_t src_x = s->source_x[s->output_width - 1 - y];
+
+            for (uint32_t x = 0; x < width; x++) {
+                uint32_t src_y = s->source_y[x];
+
+                if (s->shadow_flipped) {
+                    src_y = s->height - 1 - src_y;
+                }
+                const uint8_t *pixel = s->shadow +
+                    (size_t)src_y * s->width * 4 + src_x;
+
+                s->row_buffer[x] = (pixel[0] << 16) |
+                                   (pixel[1] << 8) | pixel[2];
+            }
         } else {
+            uint32_t src_y = s->source_y[y];
+
             if (s->shadow_flipped) {
                 src_y = s->height - 1 - src_y;
             }
             const uint8_t *source = s->shadow + (size_t)src_y * s->width * 4;
 
-            for (uint32_t x = 0; x < s->output_width; x++) {
+            for (uint32_t x = 0; x < width; x++) {
                 const uint8_t *pixel = source + s->source_x[x];
 
                 s->row_buffer[x] = (pixel[0] << 16) |
@@ -394,8 +414,8 @@ static bool s6_vfb_update(void *opaque)
         }
     }
     s->full_update = false;
-    if (first_changed < s->output_height) {
-        qemu_console_update(s->con, 0, first_changed, s->output_width,
+    if (first_changed < height) {
+        qemu_console_update(s->con, 0, first_changed, width,
                             last_changed - first_changed + 1);
     }
     return true;
@@ -412,6 +432,27 @@ static const GraphicHwOps s6_vfb_ops = {
     .invalidate = s6_vfb_invalidate,
     .gfx_update = s6_vfb_update,
 };
+
+static bool s6_vfb_get_landscape(Object *obj, Error **errp)
+{
+    return S6_VFB_DISPLAY(obj)->landscape;
+}
+
+static void s6_vfb_set_landscape(Object *obj, bool landscape, Error **errp)
+{
+    S6VfbDisplayState *s = S6_VFB_DISPLAY(obj);
+
+    if (s->landscape == landscape) {
+        return;
+    }
+    s->landscape = landscape;
+    s->full_update = true;
+    if (s->con) {
+        qemu_console_resize(s->con,
+                            landscape ? s->output_height : s->output_width,
+                            landscape ? s->output_width : s->output_height);
+    }
+}
 
 static void s6_vfb_realize(DeviceState *dev, Error **errp)
 {
@@ -453,7 +494,7 @@ static void s6_vfb_realize(DeviceState *dev, Error **errp)
     } else if (s->follow_rendered_pages) {
         s->history = g_malloc0((size_t)s->width * s->height * 4 * 4);
     }
-    s->row_buffer = g_new(uint32_t, s->output_width);
+    s->row_buffer = g_new(uint32_t, MAX(s->output_width, s->output_height));
     s->source_x = g_new(uint32_t, s->output_width);
     s->source_y = g_new(uint32_t, s->output_height);
     for (uint32_t x = 0; x < s->output_width; x++) {
@@ -464,7 +505,9 @@ static void s6_vfb_realize(DeviceState *dev, Error **errp)
     }
     s->full_update = true;
     s->con = qemu_graphic_console_create(dev, 0, &s6_vfb_ops, s);
-    qemu_console_resize(s->con, s->output_width, s->output_height);
+    qemu_console_resize(s->con,
+                        s->landscape ? s->output_height : s->output_width,
+                        s->landscape ? s->output_width : s->output_height);
 }
 
 static const Property s6_vfb_properties[] = {
@@ -486,6 +529,8 @@ static void s6_vfb_class_init(ObjectClass *oc, const void *data)
     dc->desc = "SM-G925F ARM64 virtual framebuffer scanout";
     dc->realize = s6_vfb_realize;
     device_class_set_props(dc, s6_vfb_properties);
+    object_class_property_add_bool(oc, "landscape",
+                                   s6_vfb_get_landscape, s6_vfb_set_landscape);
 }
 
 static const TypeInfo s6_vfb_types[] = {

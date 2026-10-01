@@ -75,7 +75,8 @@ def build(source, output):
                  "dhd.ko": WORK / "wifi/dhd.ko", "g925-first-boot.sh": ROOT / "guest/first-boot.sh",
                  "adb-start.sh": ROOT / "guest/adb-start.sh",
                  "g925_headset.ko": WORK / "audio/g925_headset.ko", "audio-relay": WORK / "audio/audio-relay",
-                 "audio-start.sh": ROOT / "guest/audio-start.sh", "g925-sdcard": WORK / "storage/g925-sdcard"}
+                 "audio-start.sh": ROOT / "guest/audio-start.sh", "g925-sdcard": WORK / "storage/g925-sdcard",
+                 "g925-rotation": WORK / "input/g925-rotation"}
         for name, original in files.items():
             target = tree / "sbin" / name
             shutil.copyfile(original, target)
@@ -98,11 +99,13 @@ def build(source, output):
                       "    chmod 0666 /sys/module/dhd/parameters/firmware_path",
                       "    chmod 0666 /sys/module/dhd/parameters/nvram_path",
                       "    setprop wlan.driver.status ok", "", "on boot",
-                      "    start g925console", "    start g925firstboot", "",
+                      "    start g925console", "    start g925firstboot", "    start g925rotate", "",
                       "service g925console /sbin/busybox sh -i", "    disabled", "    console",
                       "    seclabel u:r:init:s0", "",
                       "service g925firstboot /sbin/busybox sh /sbin/g925-first-boot.sh",
                       "    disabled", "    oneshot", "    seclabel u:r:init:s0", "",
+                      "service g925rotate /sbin/g925-rotation",
+                      "    disabled", "    seclabel u:r:init:s0", "",
                       "service g925audio /sbin/busybox sh /sbin/audio-start.sh",
                       "    disabled", "    seclabel u:r:init:s0", "",
                       "service g925adb /sbin/busybox sh /sbin/adb-start.sh",

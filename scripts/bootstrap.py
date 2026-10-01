@@ -5,6 +5,7 @@ import argparse
 import fcntl
 import importlib.util
 import io
+import json
 import os
 import platform
 import shutil
@@ -14,8 +15,8 @@ import tarfile
 from pathlib import Path
 
 from common import (ROOT, WORK, LOGS, VERSIONS, cached, checkout, command, download,
-                    find_tool, fingerprint, unpack_tar, unpack_zip)
-from firmware import prepare_firmware, find_cached_firmware, dump, expand_sparse
+                    find_tool, fingerprint, unpack_tar, unpack_zip, write_json)
+from firmware import prepare_firmware, find_cached_firmware, dump, expand_sparse, debugfs
 from supersu import bundle as supersu_bundle
 
 
@@ -244,6 +245,7 @@ def prepare_images(firmware, firmware_key, *, debloat=False):
     ramdisk_key = fingerprint(ROOT / "scripts/build-ramdisk.py", ROOT / "guest", WORK / "wifi/virtio_net.ko", WORK / "wifi/dhd.ko",
                               WORK / "audio/audio-relay", WORK / "audio/g925_headset.ko",
                               WORK / "storage/g925-sdcard",
+                              WORK / "input/g925-rotation",
                               WORK / "tools/busybox", extra=firmware_key)
     stamp = firmware / ".ramdisk-build"
     if not cached(stamp, ramdisk_key, [ramdisk]):
@@ -308,6 +310,49 @@ def build_storage(ndk, firmware, firmware_key):
     stamp.write_text(key + "\n")
 
 
+def build_input(ndk):
+    directory = WORK / "input"
+    binary = directory / "g925-rotation"
+    key = fingerprint(ROOT / "guest/rotation.c", extra=VERSIONS["downloads"]["ndk"]["sha256"])
+    stamp = directory / ".g925-build"
+    if cached(stamp, key, [binary]):
+        return
+    directory.mkdir(exist_ok=True)
+    compiler = ndk / "toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
+    command([compiler, "-O2", "-Wall", "-Wextra", ROOT / "guest/rotation.c", "-o", binary], log="input-build.log")
+    stamp.write_text(key + "\n")
+
+
+def load_debloat(state, firmware):
+    options = state / "options.json"
+    if options.exists():
+        try:
+            value = json.loads(options.read_text())["debloat"]
+        except (ValueError, KeyError, TypeError) as error:
+            raise RuntimeError(f"Invalid phone options: {options}; use --debloat or --no-debloat to reset them") from error
+        if not isinstance(value, bool):
+            raise RuntimeError(f"Invalid debloat option in {options}; use --debloat or --no-debloat to reset it")
+        return value
+    # Migrate phones created before options were saved. The supported stock
+    # image contains S Health, which the minimal profile always removes.
+    system = firmware / "system-g925emu.img"
+    if (state / "device.json").exists() and system.exists():
+        try:
+            debugfs(system, "stat /priv-app/SHealth4")
+        except RuntimeError as error:
+            if "File not found" in str(error):
+                return True
+            raise
+    return False
+
+
+def save_debloat(state, debloat):
+    options = state / "options.json"
+    value = {"debloat": debloat}
+    if not options.exists() or options.read_text() != json.dumps(value, indent=2) + "\n":
+        write_json(options, value)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("firmware", nargs="?", type=Path,
@@ -315,8 +360,8 @@ def main():
     parser.add_argument("--firmware-id", help="select an extracted firmware cache by its ID or SHA-256 prefix")
     parser.add_argument("--build-only", action="store_true", help="prepare everything without opening a VM")
     parser.add_argument("--no-install", action="store_true", help="report missing packages without sudo")
-    parser.add_argument("--debloat", action=argparse.BooleanOptionalAction, default=False,
-                        help="keep only essential apps and basic utilities (default: off)")
+    parser.add_argument("--debloat", action=argparse.BooleanOptionalAction, default=None,
+                        help="enable or disable minimal apps; remembers the choice for this phone (new phones: off)")
     parser.add_argument("--renderer", choices=("auto", "hardware", "software"), default="auto")
     parser.add_argument("--adb-port", type=int, default=5555,
                         help="localhost ADB port (default: 5555)")
@@ -354,16 +399,19 @@ def main():
         ensure_dependencies(args.no_install)
         if args.firmware is not None:
             firmware, firmware_key = prepare_firmware(args.firmware.resolve())
+        from launcher import prepare_state, launch
+        state = args.state_dir.resolve() if args.state_dir else ROOT / "state" / firmware_key[:16]
+        debloat = load_debloat(state, firmware) if args.debloat is None else args.debloat
+        prepare_state(state, firmware / "hidden.raw.img")
+        save_debloat(state, debloat)
         gcc, ndk = prepare_tools(args.downloads.resolve())
         qemu = build_qemu(args.downloads.resolve(), args.jobs)
         kernel = build_kernel(gcc, args.jobs)
         build_graphics(args.downloads.resolve(), ndk, firmware, firmware_key, args.jobs)
         build_audio(gcc, ndk, args.jobs, firmware)
         build_storage(ndk, firmware, firmware_key)
-        system, ramdisk = prepare_images(firmware, firmware_key, debloat=args.debloat)
-        from launcher import prepare_state, launch
-        state = args.state_dir.resolve() if args.state_dir else ROOT / "state" / firmware_key[:16]
-        prepare_state(state, firmware / "hidden.raw.img")
+        build_input(ndk)
+        system, ramdisk = prepare_images(firmware, firmware_key, debloat=debloat)
         print("Build complete.", flush=True)
         if not args.build_only:
             return launch(args, qemu, kernel, system, ramdisk, state)

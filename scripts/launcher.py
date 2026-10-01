@@ -177,7 +177,7 @@ def launch(options, qemu, kernel, system, ramdisk, state):
                        "qmp": str(runtime / "qmp.sock"), "command": args})
             print(f"Starting Android: {ram} MiB RAM, {options.cpus} vCPUs, 720×1280 screen.", flush=True)
             print(f"ADB: adb connect 127.0.0.1:{options.adb_port}", flush=True)
-            print("Keys: F1 Recents, F2 Home, F3 Back, F4 Power, F5 Volume Down, F6 Volume Up.", flush=True)
+            print("Keys: F1 Recents, F2 Home, F3 Back, F4 Power, F5 Volume Down, F6 Volume Up, F7 Rotate.", flush=True)
             print(f"Logs: {LOGS}\nGuest disks: {state}\nClose the QEMU window to stop.", flush=True)
             while vm.poll() is None:
                 if gpu.poll() is not None:

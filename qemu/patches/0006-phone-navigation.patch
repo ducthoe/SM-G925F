@@ -1,6 +1,6 @@
 --- a/ui/gtk.c
 +++ b/ui/gtk.c
-@@ -185,6 +185,22 @@
+@@ -185,6 +185,21 @@
  
      page = gtk_notebook_get_current_page(GTK_NOTEBOOK(s->notebook));
      return gd_vc_find_by_page(s, page);
@@ -17,13 +17,12 @@
 +        return;
 +    }
 +    qemu_input_event_send_key_linux(vc->gfx.dcl.con, key, true);
-+    qemu_input_event_send_key_delay(80);
 +    qemu_input_event_send_key_linux(vc->gfx.dcl.con, key, false);
 +    gtk_widget_grab_focus(vc->gfx.drawing_area);
  }
  
  static bool gd_is_grab_active(GtkDisplayState *s)
-@@ -2773,6 +2789,26 @@
+@@ -2773,6 +2788,26 @@
      gtk_box_pack_start(GTK_BOX(s->vbox), s->menu_bar, FALSE, TRUE, 0);
      gtk_box_pack_start(GTK_BOX(s->vbox), s->notebook, TRUE, TRUE, 0);
  

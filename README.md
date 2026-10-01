@@ -55,6 +55,7 @@ The phone opens in a window that fits the whole screen. A fresh device starts in
 | Recent apps / Home / Back | Buttons below the phone screen, or **F1 / F2 / F3** |
 | Power / wake / sleep | **F4**; hold it for the power menu |
 | Volume down / up | **F5 / F6**; hold to keep adjusting |
+| Portrait / landscape | **F7**; press again to switch back |
 | Resize | Drag the window edges; the screen scales to fit |
 | Internet | Enable **QEMU Wi-Fi** in Android's Wi-Fi settings |
 | Sound | Use your Linux speakers or headphones and Android's volume controls |
@@ -62,7 +63,11 @@ The phone opens in a window that fits the whole screen. A fresh device starts in
 | Stop | Close the QEMU window |
 
 Keyboard shortcuts work while the phone screen has focus. On some laptops,
-hold **Fn** to use F1–F6 instead of the laptop's media controls.
+hold **Fn** to use F1–F7 instead of the laptop's media controls.
+
+F7 rotates the phone screen and mouse input together. Apps that support both
+orientations adjust to the selected orientation; apps that lock their orientation
+keep that preference.
 
 Screen locking follows Android's settings. PINs use the firmware's salted
 software verification because Samsung's hardware credential store is unavailable
@@ -99,8 +104,10 @@ It removes extra Samsung apps and services such as S Health, S Voice, Galaxy
 Apps, Samsung account/cloud, themes, Edge panels, Smart Manager, and bundled
 social, Microsoft, and Google media apps. The underlying Samsung UI remains.
 
-Pass `--debloat` on each launch, including with `--build-only`. To return to the
-regular app selection, use `./run.sh --no-debloat` (or simply omit `--debloat`).
+The phone remembers your choice in `state/`, including with `--build-only`.
+After enabling debloat once, plain `./run.sh` keeps it enabled. To return to the
+regular app selection, explicitly use `./run.sh --no-debloat`; that choice is
+remembered too. New phones start with debloat off.
 Switching modes automatically rebuilds the adapted system image from the
 preserved stock firmware. Saved phone data and apps you installed yourself stay
 in `state/`; for a clean minimal phone, combine `--debloat` with a new
@@ -159,7 +166,7 @@ Add these to `./run.sh` (or after the firmware path on the first build):
 | `--renderer software` | Use software graphics if your GPU driver fails |
 | `--adb-port 5557` | Choose a different localhost ADB port (default: 5555) |
 | `--jobs 2` | Reduce memory use while compiling |
-| `--debloat` / `--no-debloat` | Enable the minimal app selection / return to the regular selection (default: off) |
+| `--debloat` / `--no-debloat` | Enable / disable minimal apps; the phone remembers your choice (new phones: off) |
 | `--build-only` | Download and build without opening Android |
 | `--no-install` | Report missing dependencies without installing packages |
 | `--help` | Show all options |

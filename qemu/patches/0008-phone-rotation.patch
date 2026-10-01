@@ -1,0 +1,91 @@
+--- a/ui/gtk.c
++++ b/ui/gtk.c
+@@ -991,6 +991,51 @@
+     return TRUE;
+ }
+ 
++static Object *gd_phone_display(void)
++{
++    if (g_strcmp0(g_getenv("G925_PHONE_NAV"), "1") != 0) {
++        return NULL;
++    }
++    return object_resolve_path_type("", "s6-vfb-display", NULL);
++}
++
++static bool gd_phone_landscape(void)
++{
++    Object *display = gd_phone_display();
++
++    return display && object_property_get_bool(display, "landscape", NULL);
++}
++
++static void gd_phone_rotate(VirtualConsole *vc)
++{
++    Object *display = gd_phone_display();
++    GtkDisplayState *s = vc->s;
++    double scale = MIN(vc->gfx.scale_x, vc->gfx.scale_y);
++
++    if (!display) {
++        return;
++    }
++    object_property_set_bool(display, "landscape", !gd_phone_landscape(),
++                              &error_abort);
++    if (!s->full_screen) {
++        GdkMonitor *monitor = gdk_display_get_monitor_at_window(
++            gtk_widget_get_display(s->window),
++            gtk_widget_get_window(s->window));
++        GdkRectangle work;
++        DisplaySurface *surface = qemu_console_surface(vc->gfx.dcl.con);
++        int chrome = MAX(0, gtk_widget_get_allocated_height(s->vbox) -
++                            gtk_widget_get_allocated_height(vc->gfx.drawing_area));
++        int width = surface_width(surface);
++        int height = surface_height(surface);
++
++        gdk_monitor_get_workarea(monitor, &work);
++        scale = MIN(scale, MIN((double)MAX(180, work.width - 80) / width,
++                               (double)MAX(180, work.height - chrome - 80) / height));
++        gtk_window_resize(GTK_WINDOW(s->window), MAX(1, (int)(width * scale)),
++                          MAX(1, (int)(height * scale) + chrome));
++    }
++}
++
+ static gboolean gd_motion_event(GtkWidget *widget, GdkEventMotion *motion,
+                                 void *opaque)
+ {
+@@ -1040,10 +1085,20 @@
+             fby >= surface_height(vc->gfx.ds)) {
+             return TRUE;
+         }
+-        qemu_input_queue_abs(vc->gfx.dcl.con, INPUT_AXIS_X, fbx,
+-                             0, surface_width(vc->gfx.ds));
+-        qemu_input_queue_abs(vc->gfx.dcl.con, INPUT_AXIS_Y, fby,
+-                             0, surface_height(vc->gfx.ds));
++        int width = surface_width(vc->gfx.ds);
++        int height = surface_height(vc->gfx.ds);
++
++        if (gd_phone_landscape()) {
++            int host_x = fbx;
++
++            fbx = height - 1 - fby;
++            fby = host_x;
++            int previous_width = width;
++            width = height;
++            height = previous_width;
++        }
++        qemu_input_queue_abs(vc->gfx.dcl.con, INPUT_AXIS_X, fbx, 0, width);
++        qemu_input_queue_abs(vc->gfx.dcl.con, INPUT_AXIS_Y, fby, 0, height);
+         qemu_input_event_sync();
+     } else if (s->last_set && s->ptr_owner == vc) {
+         qemu_input_queue_rel(vc->gfx.dcl.con, INPUT_AXIS_X, fbx - s->last_x);
+@@ -1393,6 +1448,11 @@
+     /* Remap both edges through QKbdState so holds and focus-loss releases
+      * behave like physical phone buttons. */
+     lnx = gd_phone_key(gd_map_keycode(keycode));
++
++    if (lnx == KEY_F7 && key->type == GDK_KEY_PRESS &&
++        !qkbd_state_key_get(vc->gfx.kbd, lnx)) {
++        gd_phone_rotate(vc);
++    }
+ 
+     trace_gd_key_event(vc->label, keycode, lnx,
+                        (key->type == GDK_KEY_PRESS) ? "down" : "up");
