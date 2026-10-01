@@ -245,7 +245,7 @@ def prepare_images(firmware, firmware_key, *, debloat=False):
                              *(supersu / name for name in VERSIONS["supersu"]["sha256"]),
                              ROOT / "guest/audio_policy.conf",
                              WORK / "audio/lib/audio.primary.g925emu.so", WORK / "audio/lib64/audio.primary.g925emu.so",
-                             WORK / "emugl-compatible", WORK / "wifi/dhd.ko", WORK / "wifi/wifi-virtual-supplicant",
+                             WORK / "emugl-compatible", WORK / "compute", WORK / "wifi/dhd.ko", WORK / "wifi/wifi-virtual-supplicant",
                              extra=firmware_key + f":debloat={int(debloat)}")
     stamp = firmware / ".system-build"
     if not cached(stamp, system_key, [system]):
@@ -333,6 +333,36 @@ def build_input(ndk):
     directory.mkdir(exist_ok=True)
     compiler = ndk / "toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
     command([compiler, "-O2", "-Wall", "-Wextra", ROOT / "guest/rotation.c", "-o", binary], log="input-build.log")
+    stamp.write_text(key + "\n")
+
+
+def build_compute(ndk, firmware):
+    directory = WORK / "compute"
+    supported = {
+        "lib": "1abca11e7d8b7f58f0a8495383cea4931809c2d0af168e4e01244b2f021ad437",
+        "lib64": "d00b1cc10b123bfe4dcdc54fdf137f7cafb506d86adb48b58a09f8094da6e36e",
+    }
+    key = fingerprint(ROOT / "compute/rs-driver.c",
+                      extra=VERSIONS["downloads"]["ndk"]["sha256"] + json.dumps(supported))
+    stamp = directory / ".g925-build"
+    outputs = [directory / bits / name for bits in supported
+               for name in ("libRSDriver.so", "libRSDriver.stock.so")]
+    if cached(stamp, key, outputs):
+        print("Using cached compute support.", flush=True)
+        return
+    from common import digest
+    for bits, target in (("lib", "armv7a-linux-androideabi21-clang"),
+                         ("lib64", "aarch64-linux-android21-clang")):
+        libraries = directory / bits
+        libraries.mkdir(parents=True, exist_ok=True)
+        stock = libraries / "libRSDriver.stock.so"
+        dump(firmware / "stock.raw.img", f"/{bits}/libRSDriver.so", stock)
+        if digest(stock) != supported[bits]:
+            raise RuntimeError(f"Unsupported {bits} RenderScript driver")
+        compiler = ndk / "toolchains/llvm/prebuilt/linux-x86_64/bin" / target
+        command([compiler, "-shared", "-fPIC", "-O2", "-Wall", "-Wextra",
+                 "-Wl,-soname,libRSDriver.so", ROOT / "compute/rs-driver.c",
+                 "-ldl", "-llog", "-lm", "-o", libraries / "libRSDriver.so"], log="compute-build.log")
     stamp.write_text(key + "\n")
 
 
@@ -424,6 +454,7 @@ def main():
         build_audio(gcc, ndk, args.jobs, firmware)
         build_storage(ndk, firmware, firmware_key)
         build_input(ndk)
+        build_compute(ndk, firmware)
         system, ramdisk = prepare_images(firmware, firmware_key, debloat=debloat)
         print("Build complete.", flush=True)
         if not args.build_only:

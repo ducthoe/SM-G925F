@@ -25,7 +25,7 @@ struct G925PipeState {
     GHashTable *channels;
     GQueue wakes;
     G925Channel *active_wake;
-    uint32_t channel, size, port;
+    uint32_t channel, size, port, compute_port;
     uint64_t address, params;
     int32_t status;
 };
@@ -93,13 +93,16 @@ static void close_channel(G925Channel *p)
     g_free(p);
     update_irq(s);
 }
-static int connect_channel(G925Channel *p)
+static int connect_channel(G925Channel *p, uint32_t port)
 {
     struct sockaddr_in address = {
         .sin_family = AF_INET,
-        .sin_port = htons(p->dev->port),
+        .sin_port = htons(port),
         .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
     };
+    if (!port || port > UINT16_MAX) {
+        return -4;
+    }
     p->fd = qemu_socket(AF_INET, SOCK_STREAM, 0);
     if (p->fd < 0 || connect(p->fd, (struct sockaddr *)&address,
                              sizeof(address)) < 0) {
@@ -133,10 +136,13 @@ static int write_channel(G925Channel *p, const uint8_t *data, uint32_t size)
                      * explicitly supports falling back when unavailable. */
                     return -1;
                 }
-                if (strncmp(name, "pipe:opengles", 13)) {
+                uint32_t port = p->dev->port;
+                if (!strcmp(name, "pipe:g925-renderscript")) {
+                    port = p->dev->compute_port;
+                } else if (strncmp(name, "pipe:opengles", 13)) {
                     return -1;
                 }
-                if (connect_channel(p) < 0) {
+                if (connect_channel(p, port) < 0) {
                     return -4;
                 }
                 break;
@@ -409,6 +415,7 @@ static const VMStateDescription pipe_vmstate = {
 };
 static const Property pipe_properties[] = {
     DEFINE_PROP_UINT32("port", G925PipeState, port, 22468),
+    DEFINE_PROP_UINT32("compute-port", G925PipeState, compute_port, 0),
 };
 static void pipe_class_init(ObjectClass *oc, const void *data)
 {

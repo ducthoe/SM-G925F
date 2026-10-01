@@ -205,6 +205,10 @@ def build(source, output, *, debloat=False):
             raise RuntimeError("Expected both sets of eight compatible GLES libraries")
         for library in libraries:
             install(temporary, library, "/" + str(library.relative_to(drivers)), library_label)
+        for bits in ("lib", "lib64"):
+            for name in ("libRSDriver.so", "libRSDriver.stock.so"):
+                install(temporary, WORK / "compute" / bits / name,
+                        f"/{bits}/{name}", library_label)
         config = temp / "egl.cfg"
         config.write_text("0 0 emulation\n")
         install(temporary, config, "/lib/egl/egl.cfg", library_label)

@@ -62,8 +62,17 @@ def main() -> None:
         compile_path = path
         if path.name == "GL2Encoder.cpp":
             compile_path = BUILD / "GL2Encoder.cpp"
-            compile_path.write_text(path.read_text().replace(
-                "char *brace = strrchr(name,'[');", "const char *brace = strrchr(name,'[');"))
+            data = path.read_text().replace(
+                "char *brace = strrchr(name,'[');", "const char *brace = strrchr(name,'[');")
+            # The legacy renderer has no program-binary transport. Samsung
+            # probes its format count even when binary caching is disabled;
+            # forwarding that query leaves GL_INVALID_ENUM pending and can
+            # make the next Recents hardware-layer allocation fail.
+            data = data.replace("case GL_NUM_SHADER_BINARY_FORMATS:",
+                                "case GL_NUM_PROGRAM_BINARY_FORMATS_OES:\n    case GL_NUM_SHADER_BINARY_FORMATS:")
+            data = data.replace("case GL_SHADER_BINARY_FORMATS:",
+                                "case GL_PROGRAM_BINARY_FORMATS_OES:\n    case GL_SHADER_BINARY_FORMATS:")
+            compile_path.write_text(data)
         elif path.name == "gralloc.cpp":
             compile_path = BUILD / "gralloc.cpp"
             compile_path.write_text(path.read_text().replace(

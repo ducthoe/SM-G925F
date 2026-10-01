@@ -118,6 +118,32 @@ def attach_disk(args, name, image, readonly=False):
                  "-device", f"virtio-blk-device,drive={name},iothread=storage"])
 
 
+def start_compute(runtime, mode):
+    if mode == "software":
+        return None, 0
+    port = runtime / "compute.port"
+    with (LOGS / "compute-host.log").open("ab") as output:
+        process = subprocess.Popen([sys.executable, str(ROOT / "scripts/host-renderscript-server.py"),
+                                    "--port-file", str(port)], stdout=output, stderr=subprocess.STDOUT)
+    try:
+        for attempt in range(100):
+            if port.exists():
+                number = int(port.read_text().strip())
+                if number:
+                    return process, number
+                stop(process)
+                return None, 0
+            if process.poll() is not None:
+                break
+            time.sleep(0.1)
+    except BaseException:
+        stop(process)
+        raise
+    # Compute offload is optional; the original Android driver remains usable.
+    stop(process)
+    return None, 0
+
+
 def launch(options, qemu, kernel, system, ramdisk, state):
     if not os.environ.get("DISPLAY"):
         raise RuntimeError("The graphics renderer needs an X11 display (XWayland on Wayland). Use --build-only on a headless host.")
@@ -126,10 +152,11 @@ def launch(options, qemu, kernel, system, ramdisk, state):
     pointers = symbols(kernel / "System.map")
     with tempfile.TemporaryDirectory(prefix="g925-run-") as directory:
         runtime = Path(directory)
-        gpu = vm = audio = None
+        gpu = vm = audio = compute = None
         try:
             audio, audio_port = start_audio(runtime)
             gpu, port = renderer(options.renderer, runtime / "gpu.shm")
+            compute, compute_port = start_compute(runtime, options.renderer)
             args = [str(qemu), "-machine", "virt-5.2,gic-version=2,highmem=on",
                     "-accel", "tcg,thread=multi,tb-size=1024", "-cpu", "cortex-a57",
                     "-smp", str(options.cpus), "-m", str(ram), "-kernel", str(kernel / "arch/arm64/boot/Image"),
@@ -146,6 +173,7 @@ def launch(options, qemu, kernel, system, ramdisk, state):
                     "-global", f"s6-vfb-display.pgd-phys={pointers['swapper_pg_dir']:#x}",
                     "-global", f"s6-vfb-display.host-frame-path={runtime / 'gpu.shm'}",
                     "-global", f"g925-goldfish-pipe.port={port}",
+                    "-global", f"g925-goldfish-pipe.compute-port={compute_port}",
                     "-chardev", f"socket,id=console,path={runtime / 'console.sock'},server=on,wait=off,logfile={LOGS / 'serial.log'}",
                     "-serial", "chardev:console", "-qmp", f"unix:{runtime / 'qmp.sock'},server=on,wait=off",
                     "-monitor", f"unix:{runtime / 'monitor.sock'},server=on,wait=off",
@@ -171,7 +199,9 @@ def launch(options, qemu, kernel, system, ramdisk, state):
                 link.symlink_to(runtime / target)
             with (LOGS / "qemu.log").open("ab") as output:
                 vm = subprocess.Popen(args, env=environment, stdout=output, stderr=subprocess.STDOUT)
-            write_json(WORK / "session.json", {"pid": vm.pid, "renderer_pid": gpu.pid, "audio_pid": audio.pid, "audio_port": audio_port,
+            write_json(WORK / "session.json", {"pid": vm.pid, "renderer_pid": gpu.pid,
+                       "compute_pid": compute.pid if compute else None, "compute_port": compute_port,
+                       "audio_pid": audio.pid, "audio_port": audio_port,
                        "adb_port": options.adb_port, "ram_mib": ram,
                        "cpus": options.cpus, "state_dir": str(state), "console": str(runtime / "console.sock"),
                        "qmp": str(runtime / "qmp.sock"), "command": args})
@@ -190,6 +220,7 @@ def launch(options, qemu, kernel, system, ramdisk, state):
             return 0
         finally:
             stop(vm)
+            stop(compute)
             stop(gpu)
             stop(audio)
             (WORK / "session.json").unlink(missing_ok=True)
