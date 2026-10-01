@@ -14,6 +14,8 @@
 #include <poll.h>
 
 #define TYPE_G925_PIPE "g925-goldfish-pipe"
+#define G925_WRITE_PAGES 64
+#define G925_VECTOR_VERSION 0x47505631
 OBJECT_DECLARE_SIMPLE_TYPE(G925PipeState, G925_PIPE)
 typedef struct G925Channel G925Channel;
 struct G925PipeState {
@@ -156,6 +158,78 @@ static int write_channel(G925Channel *p, const uint8_t *data, uint32_t size)
     }
     return consumed + result;
 }
+
+static int write_vector(G925Channel *p, uint64_t address, uint32_t count)
+{
+    struct {
+        uint64_t address;
+        uint32_t size, reserved;
+    } segments[G925_WRITE_PAGES];
+    struct iovec vectors[G925_WRITE_PAGES];
+    uint32_t mapped_count = 0;
+    int result = -1;
+
+    if (!count || count > G925_WRITE_PAGES || p->fd < 0 ||
+        address_space_read(&address_space_memory, address,
+                           MEMTXATTRS_UNSPECIFIED, segments,
+                           count * sizeof(segments[0])) != MEMTX_OK) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        uint64_t physical = le64_to_cpu(segments[i].address);
+        hwaddr length = le32_to_cpu(segments[i].size);
+
+        if (!length || length > 4096 - (physical & 4095)) {
+            goto unmap;
+        }
+        /* Adjacent guest pages share the same RAM mapping. Merge them
+         * before mapping and sending, so contiguous textures need fewer
+         * map operations and socket vectors. */
+        while (i + 1 < count && physical <= UINT64_MAX - length &&
+               le64_to_cpu(segments[i + 1].address) == physical + length) {
+            hwaddr next = le32_to_cpu(segments[i + 1].size);
+
+            if (!next || next > 4096 - ((physical + length) & 4095)) {
+                goto unmap;
+            }
+            length += next;
+            i++;
+        }
+        if (!address_space_access_valid(&address_space_memory, physical,
+                                        length, false, MEMTXATTRS_UNSPECIFIED)) {
+            goto unmap;
+        }
+        hwaddr requested = length;
+        void *data = address_space_map(&address_space_memory, physical,
+                                       &length, false, MEMTXATTRS_UNSPECIFIED);
+
+        if (!data) {
+            result = -2;
+            goto unmap;
+        }
+        vectors[mapped_count++] = (struct iovec) {
+            .iov_base = data, .iov_len = length,
+        };
+        if (length < requested) {
+            break;
+        }
+    }
+    struct msghdr message = {
+        .msg_iov = vectors, .msg_iovlen = mapped_count,
+    };
+
+    result = sendmsg(p->fd, &message, MSG_NOSIGNAL | MSG_DONTWAIT);
+    if (result < 0) {
+        result = (errno == EAGAIN || errno == EINTR) ? -2 : -4;
+    }
+unmap:
+    for (uint32_t i = 0; i < mapped_count; i++) {
+        address_space_unmap(&address_space_memory, vectors[i].iov_base,
+                            vectors[i].iov_len, false, 0);
+    }
+    return result;
+}
+
 static int pipe_command(G925PipeState *s, uint32_t channel, uint32_t command,
                         uint64_t address, uint32_t size)
 {
@@ -179,6 +253,8 @@ static int pipe_command(G925PipeState *s, uint32_t channel, uint32_t command,
         return -1;
     }
     switch (command) {
+    case 8:
+        return write_vector(p, address, size);
     case 2:
         g_hash_table_remove(s->channels, GUINT_TO_POINTER(channel));
         close_channel(p);
@@ -280,6 +356,7 @@ static uint64_t pipe_read(void *opaque, hwaddr offset, unsigned size)
     case 0x18: return s->params;
     case 0x1c: return s->params >> 32;
     case 0x24: return s->address >> 32;
+    case 0x28: return G925_VECTOR_VERSION;
     default: return 0;
     }
 }

@@ -18,6 +18,9 @@
 #include "ui/console.h"
 #include "ui/surface.h"
 #include "qom/object.h"
+#ifdef __x86_64__
+#include <tmmintrin.h>
+#endif
 
 #define TYPE_S6_VFB_DISPLAY "s6-vfb-display"
 OBJECT_DECLARE_SIMPLE_TYPE(S6VfbDisplayState, S6_VFB_DISPLAY)
@@ -46,6 +49,7 @@ struct S6VfbDisplayState {
     bool frame_ready;
     bool display_blank;
     bool landscape;
+    bool fast_downscale;
     bool have_visible_frame;
     DisplaySurface *last_surf;
     uint64_t frame_count;
@@ -341,6 +345,37 @@ static void s6_vfb_poll_host(S6VfbDisplayState *s)
     s->full_update = true;
 }
 
+static inline uint32_t s6_rgba_pixel(const uint8_t *pixel)
+{
+    return (pixel[0] << 16) | (pixel[1] << 8) | pixel[2];
+}
+
+#ifdef __x86_64__
+/* Convert and halve the usual 720-pixel RGBA scanline in four-pixel groups.
+ * Leave the portable converter available on hosts without SSSE3. */
+__attribute__((target("ssse3")))
+static void s6_downscale_row(const uint8_t *source, uint32_t *output,
+                             uint32_t width)
+{
+    const __m128i select = _mm_setr_epi8(
+        2, 1, 0, -1, 10, 9, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+    uint32_t x = 0;
+
+    for (; x + 4 <= width; x += 4) {
+        __m128i first = _mm_loadu_si128((const __m128i *)(source + x * 8));
+        __m128i second = _mm_loadu_si128((const __m128i *)(source + x * 8 + 16));
+
+        first = _mm_shuffle_epi8(first, select);
+        second = _mm_shuffle_epi8(second, select);
+        _mm_storeu_si128((__m128i *)(output + x),
+                         _mm_unpacklo_epi64(first, second));
+    }
+    for (; x < width; x++) {
+        output[x] = s6_rgba_pixel(source + x * 8);
+    }
+}
+#endif
+
 static bool s6_vfb_update(void *opaque)
 {
     S6VfbDisplayState *s = opaque;
@@ -389,8 +424,7 @@ static bool s6_vfb_update(void *opaque)
                 const uint8_t *pixel = s->shadow +
                     (size_t)src_y * s->width * 4 + src_x;
 
-                s->row_buffer[x] = (pixel[0] << 16) |
-                                   (pixel[1] << 8) | pixel[2];
+                s->row_buffer[x] = s6_rgba_pixel(pixel);
             }
         } else {
             uint32_t src_y = s->source_y[y];
@@ -400,11 +434,17 @@ static bool s6_vfb_update(void *opaque)
             }
             const uint8_t *source = s->shadow + (size_t)src_y * s->width * 4;
 
-            for (uint32_t x = 0; x < width; x++) {
-                const uint8_t *pixel = source + s->source_x[x];
+#ifdef __x86_64__
+            if (s->fast_downscale) {
+                s6_downscale_row(source, s->row_buffer, width);
+            } else
+#endif
+            {
+                for (uint32_t x = 0; x < width; x++) {
+                    const uint8_t *pixel = source + s->source_x[x];
 
-                s->row_buffer[x] = (pixel[0] << 16) |
-                                   (pixel[1] << 8) | pixel[2];
+                    s->row_buffer[x] = s6_rgba_pixel(pixel);
+                }
             }
         }
         if (memcmp(row, s->row_buffer, row_bytes)) {
@@ -495,6 +535,10 @@ static void s6_vfb_realize(DeviceState *dev, Error **errp)
         s->history = g_malloc0((size_t)s->width * s->height * 4 * 4);
     }
     s->row_buffer = g_new(uint32_t, MAX(s->output_width, s->output_height));
+#ifdef __x86_64__
+    s->fast_downscale = s->width == s->output_width * 2 &&
+                       __builtin_cpu_supports("ssse3");
+#endif
     s->source_x = g_new(uint32_t, s->output_width);
     s->source_y = g_new(uint32_t, s->output_height);
     for (uint32_t x = 0; x < s->output_width; x++) {
